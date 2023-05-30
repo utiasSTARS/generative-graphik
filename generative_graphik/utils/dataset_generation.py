@@ -1,0 +1,434 @@
+from typing import List, Union
+import numpy as np
+import os
+from tqdm import tqdm
+from dataclasses import dataclass
+
+import torch
+from torch_geometric.data import InMemoryDataset, Data
+import torch.multiprocessing as mp
+
+import graphik
+from graphik.graphs import ProblemGraphRevolute
+from graphik.graphs.graph_revolute import random_revolute_robot_graph
+import generative_graphik
+from generative_graphik.args.parser import parse_data_generation_args
+from generative_graphik.utils.torch_utils import (
+    batchFKmultiDOF,
+    batchPmultiDOF,
+    edge_indices_attributes,
+    node_attributes,
+)
+from graphik.utils import (
+    BASE,
+    DIST,
+    ROBOT,
+    OBSTACLE,
+    POS,
+    TYPE,
+)
+from graphik.utils.roboturdf import RobotURDF
+
+TYPE_ENUM = {
+    BASE: np.asarray([1, 0, 0]),
+    ROBOT: np.asarray([0, 1, 0]),
+    OBSTACLE: np.asarray([0, 0, 1]),
+}
+ANCHOR_ENUM = {"anchor": np.asarray([1, 0]), "not_anchor": np.asarray([0, 1])}
+
+
+class CachedDataset(InMemoryDataset):
+    def __init__(self, data, slices):
+        super(CachedDataset, self).__init__(None)
+        self.data, self.slices = data, slices
+
+
+@dataclass
+class StructData:
+    type: Union[List[torch.Tensor], torch.Tensor]
+    num_joints: Union[List[int], int]
+    num_nodes: Union[List[int], int]
+    num_edges: Union[List[int], int]
+    partial_mask: Union[List[torch.Tensor], torch.Tensor]
+    partial_goal_mask: Union[List[torch.Tensor], torch.Tensor]
+    edge_index_full: Union[List[torch.Tensor], torch.Tensor]
+    T0: Union[List[torch.Tensor], torch.Tensor]
+
+
+def generate_data_point(graph):
+    struct_data = generate_struct_data(graph)
+
+    num_joints = torch.tensor([struct_data.num_joints])
+    edge_index_full = struct_data.edge_index_full
+    T0 = struct_data.T0
+
+    q = torch.rand(num_joints[0], dtype=T0.dtype) * 2 * torch.pi - torch.pi
+    q[num_joints[0] - 1] = 0
+    T = batchFKmultiDOF(T0, q, num_joints)
+    P = batchPmultiDOF(T, num_joints)
+    T_ee = T[num_joints[0]]
+    distances = torch.linalg.norm(
+        P[edge_index_full[0], :] - P[edge_index_full[1], :], dim=-1
+    )
+
+    return Data(
+        type=struct_data.type,
+        pos=P,
+        edge_attr=distances.unsqueeze(1),
+        T_ee=T_ee,
+        num_joints=num_joints.type(torch.int32),
+        partial_mask=struct_data.partial_mask,
+        partial_goal_mask=struct_data.partial_goal_mask,
+        edge_index_full=edge_index_full.type(torch.int32),
+        T0=struct_data.T0,
+        q_goal=q,
+    )
+
+
+def generate_struct_data(graph):
+
+    robot = graph.robot
+    dof = robot.n
+    num_joints = dof
+    num_nodes = 2 * (dof + 1) + 2  # number of nodes for point graphs
+
+    type = node_attributes(graph, attrs=[TYPE])[0]
+    T0 = node_attributes(graph.robot, attrs=["T0"])[0]
+
+    G_partial = graph.from_pose(robot.pose(robot.random_configuration(), f"p{dof}"))
+    edge_index_partial, _ = edge_indices_attributes(G_partial)
+    # D = nx.to_scipy_sparse_array(G_partial.to_undirected(), weight=DIST, format="coo")
+    # ind0, ind1 = D.row, D.col
+    ind0 = edge_index_partial[0]
+    ind1 = edge_index_partial[1]
+
+    edge_index_full = (
+        (torch.ones(num_nodes, num_nodes) - torch.eye(num_nodes))
+        .nonzero()
+        .transpose(0, 1)
+    )
+    num_edges = edge_index_full[-1].shape[-1]
+
+    partial_goal_mask = torch.zeros(num_nodes)
+    partial_goal_mask[: graph.dim + 1] = 1
+    partial_goal_mask[-2:] = 1
+
+    # _______extracting partial indices from vectorized full indices via mask
+    mask_gen = torch.zeros(num_nodes, num_nodes)  # square matrix of zeroes
+    mask_gen[ind0, ind1] = 1  # set partial elements to 1
+    mask = (
+        mask_gen[edge_index_full[0], edge_index_full[1]] > 0
+    )  # get full elements from matrix (same order as generated)
+
+    return StructData(
+        type=type,
+        num_joints=num_joints,
+        num_edges=num_edges,
+        num_nodes=num_nodes,
+        partial_mask=mask,
+        partial_goal_mask=partial_goal_mask,
+        edge_index_full=edge_index_full,
+        T0=T0,
+    )
+
+
+def generate_specific_robot_data(robots, num_examples, params):
+
+    examples_per_robot = num_examples // len(robots)
+
+    all_struct_data = StructData(
+        type=[],
+        num_joints=[],
+        num_nodes=[],
+        num_edges=[],
+        partial_mask=[],
+        partial_goal_mask=[],
+        edge_index_full=[],
+        T0=[],
+    )
+
+    for robot_name in robots:
+        # generate data for robot like ur10, kuka etc.
+        if robot_name == "ur10":
+            # randomize won't work on ur10
+            # robot, graph = load_ur10(limits=None, randomized_links = False)
+            fname = graphik.__path__[0] + "/robots/urdfs/ur10_mod.urdf"
+            q_lim = np.pi * np.ones(6)
+        elif robot_name == "kuka":
+            # robot, graph = load_kuka(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
+            fname = graphik.__path__[0] + "/robots/urdfs/kuka_iiwr.urdf"
+            q_lim = np.pi * np.ones(7)
+        elif robot_name == "lwa4d":
+            # robot, graph = load_schunk_lwa4d(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
+            fname = graphik.__path__[0] + "/robots/urdfs/lwa4d.urdf"
+            q_lim = np.pi * np.ones(7)
+        elif robot_name == "panda":
+            # robot, graph = load_schunk_lwa4d(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
+            fname = graphik.__path__[0] + "/robots/urdfs/panda_arm.urdf"
+            q_lim = np.pi * np.ones(7)
+        elif robot_name == "lwa4p":
+            # robot, graph = load_schunk_lwa4p(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
+            fname = graphik.__path__[0] + "/robots/urdfs/lwa4p.urdf"
+            q_lim = np.pi * np.ones(6)
+        else:
+            raise NotImplementedError
+
+        urdf_robot = RobotURDF(fname)
+        robot = urdf_robot.make_Revolute3d(
+            -q_lim,
+            q_lim,
+            randomized_links=params["randomize"],
+            randomize_percentage=params["randomize_percentage"],
+        )  # make the Revolute class from a URDF
+        graph = ProblemGraphRevolute(robot)
+        struct_data = generate_struct_data(graph)
+
+        for _ in tqdm(range(examples_per_robot), leave=False):
+            for field in struct_data.__dataclass_fields__:
+                all_struct_data.__dict__[field].append(getattr(struct_data, field))
+
+    types = torch.cat(all_struct_data.type, dim=0)
+    T0 = torch.cat(all_struct_data.T0, dim=0).reshape(-1, 4, 4)
+    num_joints = torch.tensor(all_struct_data.num_joints)
+    num_nodes = torch.tensor(all_struct_data.num_nodes)
+    num_edges = torch.tensor(all_struct_data.num_edges)
+
+    # problem is that edge_index_full doesn't contain self-loops
+    masks = torch.cat(all_struct_data.partial_mask, dim=-1)
+    edge_index_full = torch.cat(all_struct_data.edge_index_full, dim=-1)
+    partial_goal_mask = torch.cat(all_struct_data.partial_goal_mask, dim=-1)
+
+    # delete struct data
+    all_struct_data = None
+
+    q = torch.rand(num_joints.sum(), dtype=T0.dtype) * 2 * torch.pi - torch.pi
+    q[(num_joints).cumsum(dim=-1) - 1] = 0
+    T = batchFKmultiDOF(T0, q, num_joints)
+    P = batchPmultiDOF(T, num_joints)
+    T_ee = T[num_joints.cumsum(dim=-1)]
+    offset_full = (
+        torch.cat([torch.tensor([0]), num_nodes[:-1].cumsum(dim=-1)])
+        .repeat_interleave(num_edges, dim=-1)
+        .unsqueeze(0)
+        .expand(2, -1)
+    )
+    edge_index_full_offset = edge_index_full + offset_full
+    distances = torch.linalg.norm(
+        P[edge_index_full_offset[0], :] - P[edge_index_full_offset[1], :], dim=-1
+    )
+
+    node_slice = torch.cat([torch.tensor([0]), (num_nodes).cumsum(dim=-1)])
+    joint_slice = torch.cat([torch.tensor([0]), (num_joints).cumsum(dim=-1)])
+    frame_slice = torch.cat([torch.tensor([0]), (num_joints + 1).cumsum(dim=-1)])
+    robot_slice = torch.arange(num_joints.size(0) + 1)
+    edge_full_slice = torch.cat([torch.tensor([0]), (num_edges).cumsum(dim=-1)])
+
+    slices = {
+        "edge_attr": edge_full_slice,
+        "pos": node_slice,
+        "type": node_slice,
+        "T_ee": robot_slice,
+        "num_joints": robot_slice,
+        "partial_mask": edge_full_slice,
+        "partial_goal_mask": node_slice,
+        "edge_index_full": edge_full_slice,
+        "M": frame_slice,
+        "q_goal": joint_slice,
+    }
+
+    data = Data(
+        type=types,
+        pos=P,
+        edge_attr=distances.unsqueeze(1),
+        T_ee=T_ee,
+        num_joints=num_joints.type(torch.int32),
+        partial_mask=masks,
+        partial_goal_mask=partial_goal_mask,
+        edge_index_full=edge_index_full.type(torch.int32),
+        M=T0,
+        q_goal=q,
+    )
+
+    return data, slices
+
+
+def generate_random_struct_data(dof):
+    return generate_struct_data(random_revolute_robot_graph(dof))
+
+
+def generate_randomized_robot_data(robot_type, dofs, num_examples, params):
+    # generate data for randomized robots
+
+    examples_per_dof = num_examples // len(dofs)
+    print("Generating " + robot_type + " data!")
+
+    all_struct_data = StructData(
+        type=[],
+        num_joints=[],
+        num_nodes=[],
+        num_edges=[],
+        partial_mask=[],
+        partial_goal_mask=[],
+        edge_index_full=[],
+        T0=[],
+    )
+
+    for dof in dofs:
+        with mp.Pool() as p:
+            graphs = p.map(random_revolute_robot_graph, [dof] * examples_per_dof)
+        for idx in tqdm(range(examples_per_dof), leave=False):
+            struct_data = generate_struct_data(graphs[idx])
+            for field in struct_data.__dataclass_fields__:
+                all_struct_data.__dict__[field].append(getattr(struct_data, field))
+
+    types = torch.cat(all_struct_data.type, dim=0)
+    T0 = torch.cat(all_struct_data.T0, dim=0).reshape(-1, 4, 4)
+    num_joints = torch.tensor(all_struct_data.num_joints)
+    num_nodes = torch.tensor(all_struct_data.num_nodes)
+    num_edges = torch.tensor(all_struct_data.num_edges)
+
+    # problem is that edge_index_full doesn't contain self-loops
+    masks = torch.cat(all_struct_data.partial_mask, dim=-1)
+    edge_index_full = torch.cat(all_struct_data.edge_index_full, dim=-1)
+    partial_goal_mask = torch.cat(all_struct_data.partial_goal_mask, dim=-1)
+
+    # delete struct data
+    all_struct_data = None
+
+    q = torch.rand(num_joints.sum(), dtype=T0.dtype) * 2 * torch.pi - torch.pi
+    q[(num_joints).cumsum(dim=-1) - 1] = 0
+    T = batchFKmultiDOF(T0, q, num_joints)
+    P = batchPmultiDOF(T, num_joints)
+    T_ee = T[num_joints.cumsum(dim=-1)]
+    offset_full = (
+        torch.cat([torch.tensor([0]), num_nodes[:-1].cumsum(dim=-1)])
+        .repeat_interleave(num_edges, dim=-1)
+        .unsqueeze(0)
+        .expand(2, -1)
+    )
+    edge_index_full_offset = edge_index_full + offset_full
+    distances = torch.linalg.norm(
+        P[edge_index_full_offset[0], :] - P[edge_index_full_offset[1], :], dim=-1
+    )
+
+    node_slice = torch.cat([torch.tensor([0]), (num_nodes).cumsum(dim=-1)])
+    joint_slice = torch.cat([torch.tensor([0]), (num_joints).cumsum(dim=-1)])
+    frame_slice = torch.cat([torch.tensor([0]), (num_joints + 1).cumsum(dim=-1)])
+    robot_slice = torch.arange(num_joints.size(0) + 1)
+    edge_full_slice = torch.cat([torch.tensor([0]), (num_edges).cumsum(dim=-1)])
+
+    slices = {
+        "edge_attr": edge_full_slice,
+        "pos": node_slice,
+        "type": node_slice,
+        "T_ee": robot_slice,
+        "num_joints": robot_slice,
+        "partial_mask": edge_full_slice,
+        "partial_goal_mask": node_slice,
+        "edge_index_full": edge_full_slice,
+        "M": frame_slice,
+        "q_goal": joint_slice,
+    }
+
+    data = Data(
+        type=types,
+        pos=P,
+        edge_attr=distances.unsqueeze(1),
+        T_ee=T_ee,
+        num_joints=num_joints.type(torch.int32),
+        partial_mask=masks,
+        partial_goal_mask=partial_goal_mask,
+        edge_index_full=edge_index_full.type(torch.int32),
+        M=T0,
+        q_goal=q,
+    )
+
+    return data, slices
+
+
+def generate_dataset(params, robots):
+    dof = params.get("dof", [3])  # if no dofs are defined, default to 3
+    num_examples = params.get("size", 1000)
+
+    if robots[0] == "revolute_chain":
+        data, slices = generate_randomized_robot_data(
+            robots[0], dof, num_examples, params
+        )
+    else:
+        data, slices = generate_specific_robot_data(robots, num_examples, params)
+
+    return data, slices
+
+
+def main(args):
+    # torch.multiprocessing.set_sharing_strategy('file_system')
+    if args.num_examples > args.max_examples_per_file:
+        num_files = int(args.num_examples / args.max_examples_per_file)
+    else:
+        num_files = 1
+
+    if args.storage_base_path is None:
+        storage_path = generative_graphik.__path__[0] + "/../datasets/" + args.id + "/"
+        val_path = (
+            generative_graphik.__path__[0] + "/../datasets/" + args.id + "_validation/"
+        )
+    else:
+        storage_path = args.storage_base_path
+        val_path = args.storage_base_path + "_validation/"
+
+    if not os.path.exists(storage_path):
+        print(f"Path {storage_path} not found. Creating directory.")
+        os.makedirs(storage_path)
+
+    if not os.path.exists(val_path):
+        print(f"Path {val_path} not found. Creating directory.")
+        os.makedirs(val_path)
+
+    print(f"Saving dataset to {storage_path} as {num_files} separate files.")
+    for idx in range(num_files):
+
+        dataset_params = {
+            "size": args.num_examples // num_files,
+            "samples": args.num_samples,
+            "dof": args.dofs,
+            "goal_type": args.goal_type,
+            "randomize": args.randomize,
+            "randomize_percentage": args.randomize_percentage,
+        }
+
+        data, slices = generate_dataset(
+            dataset_params,
+            args.robots,
+        )
+
+        dataset = CachedDataset(data, slices)
+
+        with open(storage_path + "data_" + f"{idx}" + ".p", "wb") as f:
+            torch.save(dataset, f)
+
+    num_val_examples = int(
+        (args.num_examples / num_files) / (100 / args.validation_percentage)
+    )
+    print(
+        f"Generating validation set with {num_val_examples} problems (10% of single file)."
+    )
+    dataset_params = {
+        "size": num_val_examples,
+        "samples": args.num_samples,
+        "dof": args.dofs,
+        "goal_type": args.goal_type,
+        "randomize": args.randomize,
+        "randomize_percentage": args.randomize_percentage,
+    }
+    data, slices = generate_dataset(
+        dataset_params,
+        args.robots,
+    )
+    dataset = CachedDataset(data, slices)
+    with open(val_path + "data_0" + ".p", "wb") as f:
+        torch.save(dataset, f)
+
+
+if __name__ == "__main__":
+    args = parse_data_generation_args()
+    main(args)
