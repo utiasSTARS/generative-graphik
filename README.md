@@ -1,5 +1,5 @@
 # generative-graphik
-Public code for "Learned Generative Graphical Inverse Kinematics" 
+Code for "Learned Generative Graphical Inverse Kinematics" 
 
 ## Installation
 ```
