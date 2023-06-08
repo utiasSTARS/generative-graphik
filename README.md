@@ -1,4 +1,4 @@
-# generative-graphik
+# generative-graphIK
 Code for "Learned Generative Graphical Inverse Kinematics" 
 
 ## Installation
