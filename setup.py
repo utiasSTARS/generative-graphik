@@ -20,7 +20,7 @@ setup(
         "torch-spline-conv",
         "torch-geometric",
         "liegroups @ git+ssh://git@github.com/utiasSTARS/liegroups@generative_ik#egg=liegroups",
-        "graphIK @ git+ssh://git@github.com/utiasSTARS/https://github.com/utiasSTARS/generative-graphIK",
+        "graphIK @ git+ssh://git@github.com/utiasSTARS/https://github.com/utiasSTARS/graphIK",
         "networkx >= 2.8",
     ],
     python_requires=">=3.8",
