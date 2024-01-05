@@ -13,11 +13,6 @@ setup(
     install_requires=[
         "pandas",
         "urdfpy",
-        "torch-sparse",
-        "torch-cluster",
-        "torch-scatter",
-        "torch-spline-conv",
-        "torch-geometric",
         "liegroups @ git+ssh://git@github.com/utiasSTARS/liegroups@generative_ik#egg=liegroups",
         "graphIK @ git+ssh://git@github.com/utiasSTARS/graphIK.git",
         "networkx >= 2.8",
