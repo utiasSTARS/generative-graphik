@@ -2,6 +2,9 @@
 Code for "Generative Graphical Inverse Kinematics" 
 
 ## Installation
+Install matching versions of [PyTorch](https://pytorch.org/get-started/previous-versions/#v1101:~:text=org/whl/cpu-,v1.10.1,-Conda) and [PyTorch-Geometric](https://pytorch-geometric.readthedocs.io/en/2.0.3/notes/installation.html). We used `torch-1.10.1` and `torch-geometric-2.0.4` but other versions should work as well. 
+
+After installing the above:
 ```
 pip install -e .
 ```
