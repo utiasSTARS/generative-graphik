@@ -28,9 +28,9 @@ then
     echo "Dataset ${DATASET_NAME} not found, creating it."
     python -u ${SRC_PATH}/generative_graphik/utils/dataset_generation.py \
         --id "${DATASET_NAME}" \
-        --robots ur10 kuka panda lwa4d lwa4p \
-        --num_examples 512000 \
-        --max_examples_per_file 512000 \
+        --robots ur10 \
+        --num_examples 100000 \
+        --max_examples_per_file 100000 \
         --goal_type pose \
         --randomize False
 else
@@ -64,7 +64,7 @@ python -u ${SRC_PATH}/generative_graphik/train.py \
     --num_likelihood_mixture_components 1\
     --num_anchor_nodes 4 \
     --train_prior True \
-    --n_epoch 480 \
+    --n_epoch 1 \
     --n_scheduler_epoch 60\
     --dim_goal 6 \
     --storage_base_path "${SRC_PATH}/saved_models" \

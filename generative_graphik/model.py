@@ -1,4 +1,5 @@
 import random
+import time
 
 import torch
 import torch.nn as nn
@@ -129,16 +130,15 @@ class Model(nn.Module):
 
     def preprocess(self, data):
         data["edge_index_full"] = data.edge_index_full.type(torch.long)
-        data["edge_attr_partial"] = data.edge_attr[data.partial_mask]
-        data["edge_attr_partial_full"] = data.partial_mask.unsqueeze(-1) * data.edge_attr
+        # data["edge_attr_partial"] = data.edge_attr[data.partial_mask]
+        data["edge_attr_partial"] = data.partial_mask.unsqueeze(-1) * data.edge_attr
         data["T_ee"] = torch_log_from_T(data.T_ee)
+        dim = data.T_ee.shape[-1]//3 + 1
+        data["goal_data_repeated_per_node"] = torch.repeat_interleave(data.T_ee, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
         return data
 
-    def loss(self, res, epoch):
-        goal_pos = res["goal_pos"]
-        batch_size = res["batch_size"]
+    def loss(self, res, epoch, batch_size, goal_pos, partial_goal_mask):
         mu_x_sample = res["mu_x_sample"]
-        partial_goal_mask = res["partial_goal_mask"]
         partial_non_goal_mask = torch.ones_like(partial_goal_mask) - partial_goal_mask
         beta_kl = min(((epoch + 1) / self.n_beta_scaling_epoch), 1.0)
         stats = {}
@@ -174,35 +174,26 @@ class Model(nn.Module):
         stats["total_l"] = loss.item()
         return loss_opt, stats
 
-    def forward(self, data):
-        batch_size = data.num_graphs
-        nodes_per_single_graph = int(data.num_nodes / batch_size)
-        partial_goal_mask = data.partial_goal_mask
-        dim = data.T_ee.shape[-1]//3 + 1
-
-        goal_data_repeated_per_node = torch.repeat_interleave(data.T_ee, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
-
+    def forward(self, x, h, edge_attr, edge_attr_partial, edge_index, partial_goal_mask):
         # Goal T_g encoder, all edge attributes (distances)
         z_goal = self.goal_config_encoder(
-            x=data.pos,
-            h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-            edge_attr=data.edge_attr,
-            edge_index=data.edge_index_full,
+            x=x,
+            h=h,
+            edge_attr=edge_attr,
+            edge_index=edge_index,
         )
         
         # AlphaFold style sampling of iterations to encourage fast convergence
         num_iterations = random.randint(1, self.max_num_iterations)
 
-        nodes = partial_goal_mask[:, None] * data.pos
-        edges = data.edge_attr_partial_full
-        for ii in range(num_iterations):
+        for _ in range(num_iterations):
 
             # unknown distances and positions transformed to 0
             z_goal_partial = self.goal_partial_config_encoder(
-                x=nodes,
-                h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-                edge_attr=edges,
-                edge_index=data.edge_index_full,
+                x=partial_goal_mask[:, None] * x,
+                h=h,
+                edge_attr=edge_attr_partial,
+                edge_index=edge_index,
             )
 
             # Encode conditional prior p(z | c)
@@ -231,9 +222,9 @@ class Model(nn.Module):
             ), dim=-1)
             mu_x_sample = self.decoder(
                 x=inp_decoder,
-                h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-                edge_attr=0.0 * data.edge_attr,
-                edge_index=data.edge_index_full,
+                h=h,
+                edge_attr=0.0 * edge_attr,
+                edge_index=edge_index,
             )
 
             # Decode distribution p(x | z, c) if we're going to iterate
@@ -245,27 +236,20 @@ class Model(nn.Module):
                 ), dim=-1)
                 mu_x_sample_prior = self.decoder(
                     x=inp_decoder_prior,
-                    h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-                    edge_attr=0.0 * data.edge_attr,
-                    edge_index=data.edge_index_full,
+                    h=h,
+                    edge_attr=0.0 * edge_attr,
+                    edge_index=edge_index,
                 )
                 nodes = mu_x_sample_prior
-                src, dst = data.edge_index_full  
+                src, dst = edge_index  
                 edges = ((nodes[src] - nodes[dst])**2).sum(dim=-1).sqrt()
                 edges = edges.unsqueeze(-1)
 
-        return {"mu_x_sample": mu_x_sample,
-                "nodes_per_single_graph": nodes_per_single_graph,
-                "qz_xc": qz_xc,
-                "pz_c": pz_c,
-                "goal_pos": data.pos,
-                "partial_goal_mask": partial_goal_mask,
-                "edge_index_full": data.edge_index_full,
-                # "edge_index_partial": data.edge_index_partial,
-                "batch_size": batch_size,
-                "T0": data.M,
-                "num_joints": data.num_joints,
-                "q_goal": data.q_goal}
+        return {
+            "mu_x_sample": mu_x_sample,
+            "qz_xc": qz_xc,
+            "pz_c": pz_c
+        }
 
     def forward_eval(self, data, num_samples=1):
         batch_size = data.num_graphs

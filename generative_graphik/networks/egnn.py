@@ -1,8 +1,11 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
-
+from torch import Tensor
 from torch_geometric.utils import degree
 from torch_geometric.nn import MessagePassing
+from torch_geometric.typing import OptTensor
 
 from generative_graphik.utils.torch_utils import get_norm_layer
 
@@ -31,6 +34,7 @@ class EGNNLayer(MessagePassing):
         **kwargs
     ):
         super(EGNNLayer, self).__init__(aggr=aggr, **kwargs)
+
         self.m_len = channels_m
 
         phi_e_layers = []
@@ -83,17 +87,18 @@ class EGNNLayer(MessagePassing):
         self.phi_h = nn.Sequential(*phi_h_layers)
         self.phi_h = ResWrapper(self.phi_h, dim_res=channels_h)
 
-    def forward(self, x, h, edge_attr, edge_index, c=None):
+    def forward(self, x: Tensor, h: Tensor, edge_attr: Tensor, edge_index: Tensor, c: OptTensor=None) -> Tensor:
         if c is None:
             c = degree(edge_index[0], x.shape[0]).unsqueeze(-1)
+        # propagate_type: (x: Tensor, h: Tensor, edge_attr: Tensor, c: OptTensor)
         return self.propagate(edge_index=edge_index, x=x, h=h, edge_attr=edge_attr, c=c)
 
-    def message(self, x_i, x_j, h_i, h_j, edge_attr):
+    def message(self, x_i: Tensor, x_j: Tensor, h_i: Tensor, h_j: Tensor, edge_attr: Tensor) -> Tensor:
         mh_ij = self.phi_e(torch.cat([h_i, h_j, torch.norm(x_i - x_j, dim=-1, keepdim=True)**2, edge_attr], dim=-1))
         mx_ij = (x_i - x_j) * self.phi_x(mh_ij)
         return torch.cat((mx_ij, mh_ij), dim=-1)
 
-    def update(self, aggr_out, x, h, edge_attr, c):
+    def update(self, aggr_out: Tensor, x: Tensor, h: Tensor, edge_attr: Tensor, c: Tensor) -> Tuple[Tensor, Tensor]:
         m_x, m_h = aggr_out[:, :self.m_len], aggr_out[:, self.m_len:]
         h_l1 = self.phi_h(torch.cat([h, m_h], dim=-1))
         x_l1 = x + (m_x / c)
