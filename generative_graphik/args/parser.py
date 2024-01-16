@@ -16,6 +16,7 @@ def parse_training_args():
     parser.add_argument('--storage_base_path', type=str, required=True, help='Base path to store all training data')
     parser.add_argument('--training_data_path', type=str, default="planar_chain_size_20000_dof_[5, 7, 9, 11]_randomize_True_partial_True_approx_edges_False_data.p", help='Path to training data')
     parser.add_argument('--validation_data_path', type=str, default="planar_chain_size_20000_dof_[5, 7, 9, 11]_randomize_True_partial_True_approx_edges_False_data.p", help='Path to training data')
+    parser.add_argument('--pretrained_weights_path', type=str, default=None, help='Path to pretrained weights')
     parser.add_argument('--module_path', type=str, default="none", help='Path to network module.')
 
     # Training Settings
