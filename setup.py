@@ -13,7 +13,7 @@ setup(
     install_requires=[
         "pandas",
         "urdfpy",
-        "numpy >= 1.16",
+        "numpy <= 1.23.5",
         "liegroups @ git+ssh://git@github.com/utiasSTARS/liegroups@generative_ik#egg=liegroups",
         "graphIK @ git+ssh://git@github.com/utiasSTARS/graphIK@generative_ik#egg=graphIK",
         "networkx >= 2.8.7",
