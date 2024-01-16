@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-import importlib.util
 import json
-# import tikzplotlib
 import os
 import sys
+import importlib.util
 
-# from seaborn.utils import despine
 
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 import random
@@ -19,7 +17,9 @@ import numpy as np
 from generative_graphik.args.parser import parse_analysis_args
 from generative_graphik.args.utils import str2bool
 import argparse
+# import tikzplotlib
 # import seaborn as sns
+# from seaborn.utils import despine
 # sns.set_theme(style="darkgrid")
 
 

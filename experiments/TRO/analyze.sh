@@ -11,29 +11,11 @@ python table.py \
     --save_latex True \
     --latex_path "/home/filipmrc/Documents/Latex/2022-limoyo-maric-generative-corl/" \
 
-# python waterfall.py \
-#     --id "${NAME}_experiment" \
-#     --save_latex False \
-#     --latex_path "/home/filipmrc/Documents/Latex/2022-limoyo-maric-generative-corl/"
-
-# python error_bars.py \
-#     --id "${NAME}_experiment" \
-#     --save_latex False \
-#     --latex_path "/home/filipmrc/Documents/Latex/2022-limoyo-maric-generative-corl/"
-
-# python timings.py \
-#     --id "${NAME}_experiment" \
-#     --robots kuka \
-#     --n_evals 100 \
-#     --model_path "${MODEL_PATH}/" \
-#     --device cuda:0 \
-#     --num_samples 10 20 30 40 50 60 70 80 90 100 110 120 130 140
-
-# python dist_images.py \
-#     --id "${NAME}_experiment" \
-#     --robots panda\
-#     --n_evals 10 \
-#     --model_path "${MODEL_PATH}/" \
-#     --device cpu \
-#     --randomize False \
-#     --num_samples 32
+python dist_images.py \
+    --id "${NAME}_experiment" \
+    --robots ur10 \
+    --n_evals 10 \
+    --model_path "${MODEL_PATH}/" \
+    --device cpu \
+    --randomize False \
+    --num_samples 32
