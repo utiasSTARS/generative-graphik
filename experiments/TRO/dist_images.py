@@ -111,7 +111,7 @@ def main(args):
     model_args = model_arg_loader(args.model_path[0])
     model = model.Model(model_args).to(device)
     name = model_args.id.replace("model", "results")
-    exp_dir = f"{sys.path[0]}/results/"+ f"{args.id}/images/"
+    exp_dir = f"{sys.path[0]}/results/TRO/"+ f"{args.id}/images/"
     os.makedirs(exp_dir, exist_ok=True)
     c = np.pi / 180
 
