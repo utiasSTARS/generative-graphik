@@ -28,9 +28,10 @@ then
     echo "Dataset ${DATASET_NAME} not found, creating it."
     python -u ${SRC_PATH}/generative_graphik/utils/dataset_generation.py \
         --id "${DATASET_NAME}" \
-        --robots ur10 \
-        --num_examples 100000 \
-        --max_examples_per_file 100000 \
+        --robots kuka \
+        --num_examples 512000 \
+        --max_examples_per_file 512000 \
+        --goal_type pose \
         --goal_type pose \
         --randomize False
 else
@@ -43,7 +44,7 @@ python -u ${SRC_PATH}/generative_graphik/train.py \
     --id "${NAME}_model" \
     --norm_layer LayerNorm \
     --debug False \
-    --device cuda \
+    --device cuda:1 \
     --n_worker 0 \
     --n_beta_scaling_epoch 1 \
     --lr 3e-4 \
@@ -53,7 +54,7 @@ python -u ${SRC_PATH}/generative_graphik/train.py \
     --graph_mlp_hidden_size 128 \
     --mlp_hidden_size 128 \
     --dim_latent_node_out 16 \
-    --dim_latent 128 \
+    --dim_latent 64 \
     --gnn_type "egnn" \
     --num_gnn_layers 5 \
     --num_node_features_out 3 \
@@ -74,5 +75,5 @@ python -u ${SRC_PATH}/generative_graphik/train.py \
     --use_validation True \
     --n_checkpoint_epoch 16 \
     --non_linearity silu \
-    --rec_gain 10
+    --rec_gain 10 
 fi

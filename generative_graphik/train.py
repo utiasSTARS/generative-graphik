@@ -61,7 +61,7 @@ def opt_epoch(paths, model, epoch, device, opt=None, total_batches=100):
                 worker_init_fn=_init_fn
             )
             for idx, data in enumerate(loader):
-
+                
                 # Pick 1 random config from the samples as the goal and the rest as the random configs
                 with torch.no_grad():
                     data_ = model.preprocess(data)
@@ -72,7 +72,7 @@ def opt_epoch(paths, model, epoch, device, opt=None, total_batches=100):
                     h=torch.cat((data_.type, data_.goal_data_repeated_per_node), dim=-1), 
                     edge_attr=data_.edge_attr,
                     edge_attr_partial=data_.edge_attr_partial,
-                    edge_index=data.edge_index_full,
+                    edge_index=data_.edge_index_full,
                     partial_goal_mask=data_.partial_goal_mask
                 )
 
@@ -138,8 +138,8 @@ def train(args):
     torch.backends.cudnn.deterministic = args.cudnn_deterministic
     torch.backends.cudnn.benchmark = args.cudnn_benchmark
     set_seed_torch(args.random_seed)
-
     device = torch.device(args.device)
+    print("PyTorch setting set")
 
     # Dynamically load the networks module specific to the model
     if args.module_path == "none":
@@ -149,15 +149,18 @@ def train(args):
 
     network = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(network)
+    print("Network module loaded")
 
     # Model
     model = network.Model(args).to(device)
-    model = torch_geometric.compile(model, fullgraph=True)
+    # model = torch_geometric.compile(model, fullgraph=True)
+    print("Model loaded")
 
     # Optimizer
     params = list(model.parameters())
     opt = torch.optim.AdamW(params, lr=args.lr)
     sched = torch.optim.lr_scheduler.StepLR(opt, args.n_scheduler_epoch, gamma=0.5)
+    print("Optimizer loaded")
 
     # XXX: If a checkpoint exists, assume preempted and resume training
     initial_epoch = 0
@@ -169,6 +172,12 @@ def train(args):
             opt.load_state_dict(checkpoint["opt"])
             initial_epoch = checkpoint["epoch"]
             print(f"Resuming training from checkpoint at epoch {initial_epoch}")
+        elif args.pretrained_weights_path:
+            # Optionally, if using pre-trained weights
+            state_dict = torch.load(args.pretrained_weights_path, map_location=device)
+            print("State dict loaded")
+            model.load_state_dict(state_dict)
+            print(f"Using pretrained weights from {args.pretrained_weights_path}")
 
     root = args.training_data_path
     root_val = args.validation_data_path
@@ -181,6 +190,7 @@ def train(args):
     val_loader = DataLoader(load_datasets(paths_val[0],device)[0],batch_size=args.n_batch)
     val_batches = len(val_loader)*len(paths_val)
     del loader, val_loader
+    print("Data loaders loaded")
 
     # Training loop
     try:
