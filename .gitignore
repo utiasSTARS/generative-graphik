@@ -1,6 +1,7 @@
 saved_models/
 datasets/
-# experiments/
+experiments/experiment_timing/results/
+experiments/experiment_accuracy/results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
