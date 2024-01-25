@@ -130,9 +130,13 @@ class Model(nn.Module):
 
     def preprocess(self, data):
         data["edge_index_full"] = data.edge_index_full.type(torch.long)
+        data["edge_index_partial"] = data.edge_index_full[:, data.partial_mask].type(torch.long)
         # data["edge_attr_partial"] = data.edge_attr[data.partial_mask]
         data["edge_attr_partial"] = data.partial_mask.unsqueeze(-1) * data.edge_attr
         data["T_ee"] = torch_log_from_T(data.T_ee)
+        #XXX: Hacky workaround since LieGroups doesn't handle batch_size=1
+        if data["T_ee"].dim() == 1:
+            data["T_ee"] = data["T_ee"].unsqueeze(0)
         dim = data.T_ee.shape[-1]//3 + 1
         data["goal_data_repeated_per_node"] = torch.repeat_interleave(data.T_ee, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
         return data
@@ -251,31 +255,24 @@ class Model(nn.Module):
             "pz_c": pz_c
         }
 
-    def forward_eval(self, data, num_samples=1):
-        batch_size = data.num_graphs
-        nodes_per_single_graph = int(data.num_nodes / batch_size)
-        partial_goal_mask = data.partial_goal_mask
-        dim = data.T_ee.shape[-1]//3 + 1
-
-        if batch_size == 1:
-            inp = data.T_ee.unsqueeze(0)
-        goal_data_repeated_per_node = torch.repeat_interleave(inp, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
-
-        nodes = partial_goal_mask[:, None] * data.pos
-        edges = data.edge_attr_partial_full
-        data_type = data.type
-        data_index = data.edge_index_full
+    def forward_eval(self, x, h, edge_attr, edge_attr_partial, edge_index, partial_goal_mask, nodes_per_single_graph, num_samples, batch_size):
         for ii in range(self.max_num_iterations):
             with torch.no_grad():
                 # unknown distances and positions transformed to 0
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 z_goal_partial = self.goal_partial_config_encoder(
-                    x=nodes,
-                    h=torch.cat((data_type, goal_data_repeated_per_node), dim=-1),
-                    edge_attr=edges,
-                    edge_index=data_index,
+                    x=partial_goal_mask[:, None] * x,
+                    h=h,
+                    edge_attr=edge_attr_partial,
+                    edge_index=edge_index,
                 )
-                
+                # torch.cuda.synchronize()
+                # print(f"Goal encoder time: {time.time() - tic}")
+
                 # Encode conditional prior p(z | c)
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 if self.train_prior:
                     params = self.prior_encoder(z_goal_partial)
                     pz_c =  self.pz_c_dist(*params)
@@ -284,25 +281,31 @@ class Model(nn.Module):
                         loc=torch.zeros((batch_size * nodes_per_single_graph, z_goal_partial.shape[-1])).to(device=z_goal_partial.device),
                         scale=torch.ones((batch_size * nodes_per_single_graph, z_goal_partial.shape[-1])).to(device=z_goal_partial.device),
                     )
+                # torch.cuda.synchronize()
+                # print(f"Prior encoder time: {time.time() - tic}")
 
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 # Repeat data num_samples times
                 if ii == 0:
                     z_prior = pz_c.sample([num_samples])
                     z_prior = z_prior.reshape(-1, z_prior.shape[-1])
-                    z_goal_partial = z_goal_partial.unsqueeze(0).repeat(num_samples, 1, 1)
+                    z_goal_partial = z_goal_partial.unsqueeze(0).expand(num_samples, -1, -1)
                     z_goal_partial = z_goal_partial.reshape(-1, z_goal_partial.shape[-1])
-                    data_type = data.type.unsqueeze(0).repeat(num_samples, 1, 1)
-                    data_type = data_type.reshape(-1, data_type.shape[-1])
-                    goal_data_repeated_per_node = goal_data_repeated_per_node.unsqueeze(0).repeat(num_samples, 1, 1)
-                    goal_data_repeated_per_node = goal_data_repeated_per_node.reshape(-1, goal_data_repeated_per_node.shape[-1])
-                    data_index = data.edge_index_full
+                    h = h.unsqueeze(0).expand(num_samples,-1,-1)    
+                    h = h.reshape(-1, h.shape[-1])
+                    data_index = edge_index
                     data_index = repeat_offset_index(data_index, num_samples, nodes_per_single_graph)
                     data_index = data_index.reshape(data_index.shape[0], -1)
-                    data_edge_attr = data.edge_attr.unsqueeze(0).repeat(num_samples, 1, 1)
+                    data_edge_attr = edge_attr.unsqueeze(0).expand(num_samples, -1, -1)
                     data_edge_attr = data_edge_attr.reshape(-1, data_edge_attr.shape[-1])
                 else:
                     z_prior = pz_c.sample()
-                
+                # torch.cuda.synchronize()
+                # print(f"Sampling time: {time.time() - tic}")
+
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 # Decode distribution p(x | z, c)
                 inp_decoder_prior = torch.cat((
                     z_prior,
@@ -310,10 +313,12 @@ class Model(nn.Module):
                 ), dim=-1)
                 mu_x_sample = self.decoder(
                     x=inp_decoder_prior,
-                    h=torch.cat((data_type, goal_data_repeated_per_node), dim=-1),
+                    h=h,
                     edge_attr=0.0 * data_edge_attr,
                     edge_index=data_index,
                 )
+                # torch.cuda.synchronize()
+                # print(f"Decoder time: {time.time() - tic}")
 
                 if self.max_num_iterations > 1 and self.train_prior:
                     nodes = mu_x_sample
