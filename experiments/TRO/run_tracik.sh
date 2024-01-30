@@ -18,7 +18,7 @@ fi
 python tracik_comparison.py \
     --id "${NAME}_experiment" \
     --robots ur10 kuka lwa4p lwa4d panda \
-    --n_evals 10000 \
+    --n_evals 100 \
     --model_path "${MODEL_PATH}/" \
-    --device cpu \
+    --device cuda \
     --num_samples 32
