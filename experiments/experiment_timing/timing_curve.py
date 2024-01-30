@@ -30,8 +30,8 @@ def main(args):
         data = pkl.load(f)
     data = np.array(data, dtype=object)
     data[:, 1] = data[:, 1] * 1000
-    df = pd.DataFrame(data, columns=["Number of Sampled Configurations", "Time [ms]", "DoF"])
-    out = sns.lineplot(data=df, x="Number of Sampled Configurations", y="Time [ms]", hue="DoF", errorbar="sd")
+    df = pd.DataFrame(data, columns=["Number of Sampled Configurations", "Time [ms]", "DOF"])
+    out = sns.lineplot(data=df, x="Number of Sampled Configurations", y="Time [ms]", hue="DOF", errorbar="sd")
     # plt.yscale('log')
     fig = out.get_figure()
 

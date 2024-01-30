@@ -14,10 +14,8 @@ else
     echo "Model not found!"
 fi
 
-python experiment_accuracy.py \
+python3 experiment_joint_limits.py \
     --id "${NAME}_experiment" \
-    --robots panda \
-    --n_evals 500 \
     --model_path "${MODEL_PATH}/" \
     --device cuda:1 \
-    --num_samples 32
+    --robots panda

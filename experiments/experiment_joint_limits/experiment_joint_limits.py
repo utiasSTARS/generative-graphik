@@ -72,130 +72,13 @@ def main(args):
         all_sol_data = []
         fig_handle, ax_handle = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
         for robot_type in robot_types:
-            if robot_type == "ur10":
-                # robot, graph = load_ur10(limits=None)
-                # fname = graphik.__path__[0] + "/robots/urdfs/ur10_mod.urdf"
-                # urdf_robot = RobotURDF(fname)
-
-                # UR10 coordinates for testing
-                modified_dh = False
-                a = [0, -0.612, 0.5723, 0, 0, 0]
-                d = [0.1273, 0, 0, 0.1639, 0.1157, 0.0922]
-                al = [np.pi / 2, 0, 0, np.pi / 2, -np.pi / 2, 0]
-                # th = [0, np.pi, 0, 0, 0, 0]
-                th = [0, 0, 0, 0, 0, 0]
-
-                params = {
-                    "a": a,
-                    "alpha": al,
-                    "d": d,
-                    "theta": th,
-                    "modified_dh": modified_dh,
-                    "num_joints": 6,
-                }
-                robot = RobotRevolute(params)
-                graph = ProblemGraphRevolute(robot)
-            elif robot_type == "kuka":
-                # limits_l = -np.array([170, 120, 170, 120, 170, 120, 170]) * c
-                # limits_u = np.array([170, 120, 170, 120, 170, 120, 170]) * c
-                # limits = [limits_l, limits_u]
-                # robot, graph = load_kuka(limits=None)
-                # fname = graphik.__path__[0] + "/robots/urdfs/kuka_iiwr.urdf"
-                # urdf_robot = RobotURDF(fname)
-
-                # UR10 coordinates for testing
-                modified_dh = False
-                a = [0, 0, 0, 0, 0, 0, 0]
-                d = [0.34, 0, 0.40, 0, 0.40, 0, 0.126]
-                al = [-np.pi / 2, np.pi / 2, np.pi / 2, -np.pi / 2, -np.pi / 2, np.pi / 2, 0]
-                th = [0, 0, 0, 0, 0, 0, 0]
-
-                params = {
-                    "a": a,
-                    "alpha": al,
-                    "d": d,
-                    "theta": th,
-                    "modified_dh": modified_dh,
-                    "num_joints": 7,
-                }
-                robot = RobotRevolute(params)
-                graph = ProblemGraphRevolute(robot)
-            elif robot_type == "lwa4d":
-                # limits_l = -np.array([180, 123, 180, 125, 180, 170, 170]) * c
-                # limits_u = np.array([180, 123, 180, 125, 180, 170, 170]) * c
-                # limits = [limits_l, limits_u]
-                # robot, graph = load_schunk_lwa4d(limits=None)
-                # fname = graphik.__path__[0] + "/robots/urdfs/lwa4d.urdf"
-                # urdf_robot = RobotURDF(fname)
-
-                modified_dh = False
-                a = [0, 0, 0, 0, 0, 0, 0]
-                d = [0.3, 0, 0.328, 0, 0.323, 0, 0.0824]
-                al = [-np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, 0]
-                th = [0, 0, 0, 0, 0, 0, 0]
-
-                params = {
-                    "a": a,
-                    "alpha": al,
-                    "d": d,
-                    "theta": th,
-                    "modified_dh": modified_dh,
-                    "num_joints": 7,
-                }
-                robot = RobotRevolute(params)
-                graph = ProblemGraphRevolute(robot)
-            elif robot_type == "panda":
-                limits_l = -np.array(
-                    [2.8973, 1.7628, 2.8973, 0.0698, 2.8973, 3.7525, 2.8973]
-                )
-                limits_u = np.array(
-                    [2.8973, 1.7628, 2.8973, 3.0718, 2.8973, 3.7525, 2.8973]
-                )
+            if robot_type == "panda":
+                limits_l = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
+                limits_u = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
                 limits = [limits_l, limits_u]
-                robot, graph = load_panda(limits=limits)
+                robot, graph = load_panda(limits=None)
                 fname = graphik.__path__[0] + "/robots/urdfs/panda_arm.urdf"
                 urdf_robot = RobotURDF(fname)
-
-                # modified_dh = False
-                # a = [0, 0, 0, 0.0825, -0.0825, 0, 0.088]
-                # d = [0.333, 0, 0.316, 0, 0.384, 0, 0]
-                # al = [0, -np.pi/2, np.pi / 2, np.pi / 2, -np.pi / 2, np.pi / 2, np.pi / 2]
-                # th = [0, 0, 0, 0, 0, 0, 0]
-
-                # params = {
-                #     "a": a,
-                #     "alpha": al,
-                #     "d": d,
-                #     "theta": th,
-                #     "modified_dh": modified_dh,
-                #     "num_joints": 7,
-                # }
-                # robot = RobotRevolute(params)
-                # graph = ProblemGraphRevolute(robot)
-            elif robot_type == "lwa4p":
-                # limits_l = -np.array([170, 170, 155.3, 170, 170, 170]) * c
-                # limits_u = np.array([170, 170, 155.3, 170, 170, 170]) * c
-                # limits = [limits_l, limits_u]
-                # robot, graph = load_schunk_lwa4p(limits=None)
-                # fname = graphik.__path__[0] + "/robots/urdfs/lwa4p.urdf"
-                # urdf_robot = RobotURDF(fname)
-
-                modified_dh = False
-                a = [0, 0.350, 0, 0, 0, 0]
-                d = [0.205, 0, 0, 0.305, 0, 0.075]
-                al = [-np.pi / 2, np.pi, -np.pi / 2, np.pi / 2, -np.pi / 2, 0]
-                th = [0, 0, 0, 0, 0, 0]
-
-                params = {
-                    "a": a,
-                    "alpha": al,
-                    "d": d,
-                    "theta": th,
-                    "modified_dh": modified_dh,
-                    "num_joints": 6,
-                }
-                robot = RobotRevolute(params)
-                graph = ProblemGraphRevolute(robot)
             else:
                 raise NotImplementedError
 
@@ -215,9 +98,8 @@ def main(args):
                 #     (q_goal[f"p{jj}"] for jj in range(1, graph.robot.n + 1)), dtype=float
                 # )
 
-                # Compute solutions
-                t0 = time.time()
                 P_all = model.forward_eval(data, num_samples=args.num_samples).cpu().detach().numpy()
+                # Compute solutions
                 # P_all = (
                 #         model.forward_eval(
                 #             x=data.pos, 
@@ -231,19 +113,20 @@ def main(args):
                 #             num_samples=args.num_samples
                 #         )
                 # )
-                # torch.cuda.synchronize()
-                t_sol = time.time() - t0
 
                 # Analyze solutions
                 e_pose = np.empty([P_all.shape[0]])
                 e_pos = np.empty([P_all.shape[0]])
                 e_rot = np.empty([P_all.shape[0]])
                 q_sols_np = np.empty([P_all.shape[0], robot.n])
-                q_sols = []
                 for idx in range(P_all.shape[0]):
                     P = P_all[idx, :]
-                    # q_sol = batchIKmultiDOF(P, prob_data.T0, prob_data.num_joints, 
-                    # T_final = torch.tensor(T_goal.as_matrix(), dtype=P.dtype).unsqueeze(0).to(device))
+                    # q_sol = batchIKmultiDOF(
+                    #     P, 
+                    #     prob_data.T0, 
+                    #     prob_data.num_joints, 
+                    #     T_final = torch.tensor(T_goal.as_matrix(), dtype=P.dtype).unsqueeze(0).to(device)
+                    # )
 
                     q_sol = graph.joint_variables(
                         graph_from_pos(P, graph.node_ids), {robot.end_effectors[0]: T_goal}
@@ -269,7 +152,6 @@ def main(args):
                         "Err. Rotation": e_rot[idx],
                         # "Goal Config": q_goal_np,
                         # "Goal Points": P_goal,
-                        "Sol. Time": t_sol,
                     }
                     sol_data.append(entry)
                 all_sol_data.append(pd.DataFrame(sol_data))
@@ -288,10 +170,10 @@ if __name__ == "__main__":
     # General settings
     parser.add_argument("--id", type=str, default="test_experiment", help="Name of the folder with experiment data")
     parser.add_argument("--model_path", nargs="*", type=str, required=True, help="Path to folder with model data")
-    parser.add_argument('--device', type=str, default='cuda:1', help='Device to use for PyTorch')
+    parser.add_argument('--device', type=str, default='cpu', help='Device to use for PyTorch')
     parser.add_argument("--robots", nargs="*", type=str, default=["planar_chain"], help="Type of robot used")
-    parser.add_argument("--n_evals", type=int, default=100, help="Number of evaluations")
-    parser.add_argument("--num_samples", type=int, default=100, help="Total number of samples per problem")
+    parser.add_argument("--n_evals", type=int, default=1000, help="Number of evaluations")
+    parser.add_argument("--num_samples", type=int, default=1, help="Total number of samples per problem")
 
     args = parser.parse_args()
     main(args)
