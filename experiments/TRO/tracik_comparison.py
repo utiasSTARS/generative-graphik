@@ -83,14 +83,15 @@ def main(args):
         else:
             raise NotImplementedError
 
-        ik_solver = TracIKSolver(fname, link_base, link_ee, timeout=0.1)
+        t_sol_max = 0.1
+        ik_solver = TracIKSolver(fname, link_base, link_ee, timeout=t_sol_max)
         ub = np.ones(ik_solver.number_of_joints) * np.pi
         lb = -ub
         ik_solver.joint_limits = lb, ub
-        q_init = np.zeros(ik_solver.number_of_joints)
+        # q_init = np.zeros(ik_solver.number_of_joints)
         for kdx in range(evals_per_robot):
             sol_data = []
-            # q_init = np.array(list(robot.random_configuration().values()))
+            q_init = np.array(list(robot.random_configuration().values()))
 
             # Generate random problem
             prob_data = generate_data_point(graph).to(device)
@@ -102,7 +103,9 @@ def main(args):
             q_sol = ik_solver.ik(T_goal, qinit=q_init, bx = 1e-3, by = 1e-3, bz = 1e-3)
             t_sol = time.time() - t0
             if q_sol is None:
-                import ipdb; ipdb.set_trace()
+                q_sol = q_init
+                t_sol = t_sol_max
+                # import ipdb; ipdb.set_trace()
 
             T_ee = ik_solver.fk(q_sol)
 
@@ -128,14 +131,53 @@ def main(args):
             # print(kdx)
 
     pd_data = pd.concat(all_sol_data)
-    import ipdb; ipdb.set_trace()
 
-    for robot_type in robot_types:
-        print(robot_type)
-        success_data = pd_data[(pd_data['Err. Position'] < 1e-2) & (pd_data['Err. Rotation'] < (180/np.pi)) & (pd_data['Robot']==robot_type)]
-        print(success_data.describe())
-        print(len(success_data)/evals_per_robot)
-        print('------------------------')
+    stats = pd_data.reset_index()
+    stats["Err. Position"] = stats['Err. Position']*1000
+    stats["Err. Rotation"] = stats['Err. Rotation']*(180/np.pi)
+    q_pos = stats['Err. Position'].quantile(0.99)
+    q_rot = stats['Err. Rotation'].quantile(0.99)
+    stats = stats.drop(stats[stats['Err. Position'] > q_pos].index)
+    stats = stats.drop(stats[stats['Err. Rotation'] > q_rot].index)
+
+    stats = stats.groupby(['Robot'])[['Err. Position', 'Err. Rotation', 'Sol. Time']].describe()
+    # stats = stats.drop(['count', 'std', '50%'], axis=1, level=1)
+    stats = stats.drop(['count', '50%'], axis=1, level=1)
+    perc_data = pd_data.set_index(['Robot'])
+    perc_data['Success'] = (
+        (perc_data['Err. Position'] < 0.01) & (perc_data['Err. Rotation'] < (180/np.pi))
+    )
+    import ipdb; ipdb.set_trace()
+    stats['Success [\%]'] = perc_data['Success'].eq(True).groupby(level=0).value_counts(True).unstack(fill_value=0)[True]*100
+    # suc_pos_perc = (
+    #     perc_data["Success"]
+    #     .eq(True)
+    #     .groupby(level=[0, 1])
+    #     .value_counts(True)
+    #     .unstack(fill_value=0)
+    # )
+    # stats["Success [\%]"] = suc_pos_perc.groupby(level=0).apply(lambda c: (c>0).sum()/len(c))[True]*100
+
+    stats.rename(columns = {'75%': 'Q$_{3}$', '25%': 'Q$_{1}$','Err. Position':'Err. Pos. [mm]', 'Err. Rotation':'Err. Rot. [deg]'}, inplace = True)
+    # Swap to follow paper order
+    cols = stats.columns.tolist()
+    ins = cols.pop(4)
+    cols.insert(2, ins)
+    ins = cols.pop(9)
+    cols.insert(7, ins)
+    stats = stats[cols]
+    print(stats)
+    print(stats.mean())
+    # import ipdb; ipdb.set_trace()
+    # # print(pd_data.groupby('Robot').mean())
+
+    # for robot_type in robot_types:
+    #     print(robot_type)
+    #     success_data = pd_data[(pd_data['Err. Position'] < 1e-2) & (pd_data['Err. Rotation'] < (180/np.pi)) & (pd_data['Robot']==robot_type)]
+    #     print(success_data.describe())
+    #     print(len(success_data)/evals_per_robot)
+    #     print('------------------------')
+
     # exp_dir = f"{sys.path[0]}/results/TRO/"+ f"{args.id}/"
     # os.makedirs(exp_dir, exist_ok=True)
     # pd_data.to_pickle(os.path.join(exp_dir, "results.pkl"))

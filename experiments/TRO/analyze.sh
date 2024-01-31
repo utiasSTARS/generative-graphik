@@ -13,8 +13,8 @@ python table.py \
 
 python dist_images.py \
     --id "${NAME}_experiment" \
-    --robots ur10 \
-    --n_evals 10 \
+    --robots ur10 kuka panda \
+    --n_evals 9 \
     --model_path "${MODEL_PATH}/" \
     --device cpu \
     --randomize False \

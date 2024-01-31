@@ -15,10 +15,18 @@ else
     echo "Model not found!"
 fi
 
-python experiment_2.py \
-    --id "${NAME}_experiment" \
+# python experiment_2.py \
+#     --id "${NAME}_experiment" \
+#     --robots panda kuka lwa4d lwa4p ur10 \
+#     --n_evals 100 \
+#     --model_path "${MODEL_PATH}/" \
+#     --device cuda \
+#     --num_samples 32
+
+python experiment_2_tracik.py \
+    --id "${NAME}_tracik_experiment" \
     --robots panda kuka lwa4d lwa4p ur10 \
-    --n_evals 1000 \
+    --n_evals 10000 \
     --model_path "${MODEL_PATH}/" \
-    --device cpu \
+    --device cuda \
     --num_samples 32

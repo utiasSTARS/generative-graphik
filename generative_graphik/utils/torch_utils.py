@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 import random
 import numpy as np
 
@@ -17,6 +17,7 @@ from graphik.utils import (
     TYPE,
     POS
 )
+import time
 
 TYPE_ENUM = {
     "base": np.asarray([1, 0, 0]),
@@ -171,20 +172,32 @@ class Flatten(nn.Module):
     def forward(self, x):
         return x.view(x.size(0), -1)
 
-def SE3_from(rot: torch.Tensor, trans: torch.Tensor) -> torch.Tensor:
+@torch.compile
+def SE3_from(rot: Optional[torch.Tensor] = None, trans: Optional[torch.Tensor] = None) -> torch.Tensor:
     # Composes SE3 matrix from rotation and translation component
     # ----------------------------------------------------------------------
-    T = torch.eye(4, device=rot.device).repeat(rot.shape[0],1,1)
-    T[:,:-1,:-1] = rot
-    T[:,:-1,-1] = trans
+    # T = torch.eye(4, device=rot.device).repeat(rot.shape[0],1,1)
+    if trans is not None and rot is not None:
+        T = torch.eye(4, device=rot.device, dtype=rot.dtype).repeat(rot.shape[0],1,1)
+        T[:,:-1,:-1] = rot
+        T[:,:-1,-1] = trans
+    elif rot is not None:
+        T = torch.eye(4, device=rot.device, dtype=rot.dtype).repeat(rot.shape[0],1,1)
+        T[:,:-1,:-1] = rot
+    elif trans is not None:
+        T = torch.eye(4, device=trans.device, dtype=trans.dtype).repeat(trans.shape[0],1,1)
+        T[:,:-1,-1] = trans
+    else:
+        raise Exception("Neither rotation nor translation specified")
     return T
 
+@torch.compile
 def SE3_inv_from(rot: torch.Tensor, trans: torch.Tensor) -> torch.Tensor:
     # Composes inverse SE3 matrix from rotation and translation component
     # ----------------------------------------------------------------------
     inv_rot = rot.transpose(2,1)
     inv_trans = -torch.bmm(inv_rot, trans[:,:,None])[:,:,0]
-    inv_T = torch.eye(4, device=rot.device).repeat(rot.shape[0],1,1)
+    inv_T = torch.eye(4, device=rot.device, dtype=rot.dtype).repeat(rot.shape[0],1,1)
     inv_T[:,:-1,:-1] = inv_rot
     inv_T[:,:-1,-1] = inv_trans
     return inv_T
@@ -194,6 +207,22 @@ def SE3_inv(T: torch.Tensor):
     # ----------------------------------------------------------------------
     return SE3_inv_from(T[:,:-1,:-1], T[:,:-1,-1])
 
+@torch.compile
+def rotz(angle_in_radians, dim=3):
+    """Form a rotation matrix given an angle in rad about the z-axis."""
+    s = angle_in_radians.sin()
+    c = angle_in_radians.cos()
+
+    mat = angle_in_radians.new_empty(
+        angle_in_radians.shape[0], dim, dim, dtype=angle_in_radians.dtype).zero_()
+    mat[:, 2, 2] = 1.
+    mat[:, 0, 0] = c
+    mat[:, 0, 1] = -s
+    mat[:, 1, 0] = s
+    mat[:, 1, 1] = c
+    return mat
+
+@torch.compile
 def batchJointScrews(T0: torch.Tensor):
     omega = T0[:,:-1,2] # z axis
     q = T0[:,:-1,-1]
@@ -201,7 +230,15 @@ def batchJointScrews(T0: torch.Tensor):
     return torch.cat([v, omega], dim=-1)
 
 
-def batchIKmultiDOF(P: torch.Tensor, T0: torch.Tensor, num_joints: torch.Tensor, T_final: Optional[torch.Tensor] = None) -> torch.Tensor:
+# @torch.compile
+def batchIKmultiDOF(
+        P: torch.Tensor,
+        T0: torch.Tensor,
+        num_joints: torch.Tensor,
+        T_final: Optional[torch.Tensor] = None,
+        T_rel: Optional[torch.Tensor] = None,
+        qs_0: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     # Computes IK for multiple robots with varying DOF from points.
     # ----------------------------------------------------------------------
     # P [sum(num_nodes) x 3] - points corresponding to the distance-geometric
@@ -209,40 +246,51 @@ def batchIKmultiDOF(P: torch.Tensor, T0: torch.Tensor, num_joints: torch.Tensor,
     # T0 [num_nodes x 16] - 4x4 matrices of robot frames in home poses
     # num_joints [num_edges x 1] - number of joints (DOF) for each robot in batch
     # ----------------------------------------------------------------------
-
+    #
     device = T0.device # GPU or CPU
     dtype = T0.dtype # data type for non-integer
     dim = P.shape[1] # dimension (2 or 3)
 
+    # constant matrices (robot structure, known a priori)
+    if T_rel is None or qs_0 is None:
+        T0_inv = SE3_inv(T0) # inverses of T0 (zero config xf)
+        T_rel = torch.bmm(T0_inv, T0.roll(-1,0)) # relative xf between T0
+        T0_q = SE3_from(T0[:,:-1,:-1], T0[:,:-1,-1] + T0[:,:-1,-2]) # frames at points q
+        qs_0 = torch.bmm(T0_inv, T0_q.roll(-1,0))[:,:-1,-1] # points q at home config
+
+    omega_z = torch.tensor([[0, -1, 0], [1, 0, 0], [0, 0, 0]], dtype=dtype, device=device)
+    omega_z_sq = torch.mm(omega_z, omega_z.transpose(1,0))
+
+    # number of robots, joints, unique ids
     num_robots = num_joints.shape[0] # total number of robots
     num_nodes = 2*(num_joints+1) + (dim-1) # number of nodes for point graphs
     node_start_ind = torch.cumsum(num_nodes,dim=0) - num_nodes # start indices for nodes
     node_start_ind = node_start_ind.to(device)
+    robot_ids = torch.arange(num_robots, device=device)
 
     # normalizes the node positions to the canonical coordinate system
     x_hat = (P[node_start_ind + 1] - P[node_start_ind])
     y_hat = -(P[node_start_ind + 2] - P[node_start_ind])
     z_hat = (P[node_start_ind + 3] - P[node_start_ind])
 
-    # get modifies base frames
+    # get modified base frames
     R = torch.cat([x_hat.unsqueeze(1), y_hat.unsqueeze(1), z_hat.unsqueeze(1)], dim = 1).transpose(2,1)
     B_inv = SE3_inv_from(R, P[node_start_ind])
-    hl = torch.arange(num_robots, device=device).repeat_interleave(num_joints + 1, dim=0)
+    hl = robot_ids.repeat_interleave(num_joints + 1, dim=0)
+    # hl = torch.arange(num_robots, device=device).repeat_interleave(num_joints + 1, dim=0)
+    # hl = torch.repeat_interleave(torch.arange(num_robots, device=device), num_joints + 1, dim=0)
 
-    mask = torch.tensor(True, device=device).repeat(num_nodes.sum())
+    # mask = torch.tensor(True, device=device).repeat(num_nodes.sum())
+    mask = torch.ones(num_nodes.sum(), device=device, dtype=torch.bool)
     mask[node_start_ind+1] = False
     mask[node_start_ind+2] = False
     P = P.masked_select(mask[:,None].expand(-1,3)).reshape(-1,3)
 
+    # Initialize frame and joint angle tensors
     num_frames_total = T0.shape[0] # total number of frames on robots
     T = torch.eye(dim+1, device=device, dtype=dtype)[None,:,:].repeat(num_frames_total,1,1)
     theta = torch.zeros(num_frames_total, dtype=dtype, device=device)
 
-    # constant matrices
-    T0_inv = SE3_inv(T0) # inverses of T0
-    T_rel = torch.bmm(T0_inv, T0.roll(-1,0)) # relative xf between T0
-    T0_q = SE3_from(T0[:,:-1,:-1], T0[:,:-1,-1] + T0[:,:-1,-2])
-    qs_0 = torch.bmm(T0_inv, T0_q.roll(-1,0))[:,:-1,-1] # qs at home config
 
     # indices of relevant p and q nodes
     ind = torch.arange(num_frames_total, device=device)
@@ -252,8 +300,6 @@ def batchIKmultiDOF(P: torch.Tensor, T0: torch.Tensor, num_joints: torch.Tensor,
     # compute normalized q (i.e., distance fixed to 1) and transform to base frame
     q = torch.baddbmm(B_inv[hl[ind],:-1,-1][:,:,None], B_inv[hl[ind],:-1,:-1], P[idx_q][:,:,None])[:,:,0]
 
-    omega_z = torch.tensor([[0, -1, 0], [1, 0, 0], [0, 0, 0]], dtype=dtype, device=device)
-    omega_z_sq = torch.mm(omega_z, omega_z.transpose(1,0))
     A = torch.matmul(qs_0, omega_z)[:,None,:]
     B = torch.matmul(qs_0, omega_z_sq)[:,None,:]
 
@@ -275,13 +321,14 @@ def batchIKmultiDOF(P: torch.Tensor, T0: torch.Tensor, num_joints: torch.Tensor,
             torch.bmm(B[ei[0]-1], qs[:,None,:].transpose(2,1))[:,0] + 1e-7
         ).reshape(-1)
 
-        rotz = SO3.rotz(theta[ei[0]-1]).as_matrix().reshape(-1,3,3)
-        rotmat = SE3_from(rotz, torch.zeros([ei[0].size(0), 3]))
+        rotmat = SE3_from(rotz(theta[ei[0]-1]))
         T[ei[0]] = torch.bmm(torch.bmm(T[ei[0]-1], rotmat), T_rel[ei[0]-1].expand(ei[0].size(-1),-1,-1))
 
-        ei, _ = remove_self_loops(ei + inc)
+        ei, _ = remove_self_loops(ei + inc) # removes equivalent elements
 
-    ind = torch.arange(num_joints.sum(), device=device) + torch.arange(num_robots, device=device).repeat_interleave(num_joints)
+    ind = torch.arange(num_joints.sum(), device=device) + robot_ids.repeat_interleave(num_joints)
+    # ind = torch.arange(num_joints.sum(), device=device) + torch.arange(num_robots, device=device).repeat_interleave(num_joints)
+    # ind = torch.arange(num_joints.sum(), device=device) + torch.repeat_interleave(torch.arange(num_robots, device=device), num_joints, dim=0)
 
     if T_final is not None:
         # parallel = torch.linalg.cross(T_rel[joint_end_ind-1,:-1,-1], torch.tensor([[0,0,1]], device=device, dtype=dtype)).norm(dim=-1) < 1e-6
@@ -325,6 +372,7 @@ def batchPmultiDOF(T: torch.Tensor, num_joints: torch.Tensor) -> torch.Tensor:
 
     return P
 
+@torch.compile
 def batchFKmultiDOF(T0: torch.Tensor, q: torch.Tensor, num_joints: torch.Tensor) -> torch.Tensor:
     # Computes FK for multiple robots with varying DOF using graphs.
     # Uses the lie group FK formula:
@@ -363,7 +411,8 @@ def batchFKmultiDOF(T0: torch.Tensor, q: torch.Tensor, num_joints: torch.Tensor)
     T = torch.eye(dim+1, device=device).unsqueeze(0).repeat(total_num_frames,1,1)
 
     ei = torch.zeros(edge_index.shape[0], total_num_frames, dtype=torch.int64, device=device)
-    ei[0] = frame_start_ind.repeat_interleave(num_frames) # starting jnt id repeat for all con
+    # ei[0] = frame_start_ind.repeat_interleave(num_frames) # starting jnt id repeat for all con
+    ei[0] = torch.repeat_interleave(frame_start_ind, num_frames, 0)
     ei[1] = torch.arange(0, total_num_frames) # all others
     inc = torch.tensor([[1],[0]], dtype=torch.int64, device=device) # tensor for inc
     for _ in range(max_num_frames-1):
@@ -372,4 +421,92 @@ def batchFKmultiDOF(T0: torch.Tensor, q: torch.Tensor, num_joints: torch.Tensor)
             ei = ei + inc # next
     T[edge_index[1]] = torch.bmm(T[edge_index[1]], T0[edge_index[1]])
 
-    return T  
+    return T
+
+def batchPostProc(
+        P: torch.Tensor,
+        T0: torch.Tensor,
+        num_joints: torch.Tensor,
+        T_final: torch.Tensor,
+        T_rel: torch.Tensor,
+        qs_0: torch.Tensor,
+        A: torch.Tensor,
+        B: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    # Computes IK for multiple robots with varying DOF from points.
+    # ----------------------------------------------------------------------
+    # P [sum(num_nodes) x 3] - points corresponding to the distance-geometric
+    #   robot model described in (Maric et al.,2021)
+    # T0 [num_nodes x 16] - 4x4 matrices of robot frames in home poses
+    # num_joints [num_edges x 1] - number of joints (DOF) for each robot in batch
+    # ----------------------------------------------------------------------
+    device = T0.device # GPU or CPU
+    dtype = T0.dtype # data type for non-integer
+    dim = P.shape[1] # dimension (2 or 3)
+
+    # number of robots, joints, unique ids
+    num_robots = num_joints.shape[0] # total number of robots
+    num_nodes = 2*(num_joints+1) + (dim-1) # number of nodes for point graphs
+    node_start_ind = torch.cumsum(num_nodes,dim=0) - num_nodes # start indices for nodes
+    robot_ids = torch.arange(num_robots, device=device)
+
+    # normalizes the node positions to the canonical coordinate system
+    x_hat = (P[node_start_ind + 1] - P[node_start_ind])
+    y_hat = -(P[node_start_ind + 2] - P[node_start_ind])
+    z_hat = (P[node_start_ind + 3] - P[node_start_ind])
+
+    # get modified base frames
+    R = torch.cat([x_hat.unsqueeze(1), y_hat.unsqueeze(1), z_hat.unsqueeze(1)], dim = 1).transpose(2,1)
+    B_inv = SE3_inv_from(R, P[node_start_ind])
+    hl = robot_ids.repeat_interleave(num_joints + 1, dim=0)
+
+    mask = torch.ones(num_nodes.sum(), device=device, dtype=torch.bool)
+    mask[node_start_ind+1] = False
+    mask[node_start_ind+2] = False
+    P = P.masked_select(mask[:,None].expand(-1,3)).reshape(-1,3)
+
+    # Initialize frame and joint angle tensors
+    num_frames_total = T0.shape[0] # total number of frames on robots
+    T = torch.eye(dim+1, device=device, dtype=dtype)[None,:,:].repeat(num_frames_total,1,1)
+    theta = torch.zeros(num_frames_total, dtype=dtype, device=device)
+
+    # indices of relevant p and q nodes
+    ind = torch.arange(num_frames_total, device=device)
+    idx_p = 2*(ind - 1) + 2
+    idx_q = 2*(ind - 1) + 3
+
+    # compute normalized q (i.e., distance fixed to 1) and transform to base frame
+    q = torch.baddbmm(B_inv[hl[ind],:-1,-1][:,:,None], B_inv[hl[ind],:-1,:-1], P[idx_q][:,:,None])[:,:,0]
+
+    # generate virtual edge indices used to multiply pairs of joints
+    joint_end_ind = torch.cumsum(num_joints + 1, dim=0) - 1 # end indices of joints
+    joint_start_ind =  joint_end_ind - num_joints # start indices of joints
+
+    ei = torch.zeros(2, joint_start_ind.size(-1), dtype=torch.int64, device=device)
+    ei[0] = joint_start_ind + 1 # starting jnt id repeat for all con
+    ei[1] = joint_end_ind
+    inc = torch.tensor([[1],[0]], dtype=torch.int64, device=device) # tensor for inc
+    for _ in range(1, num_joints.max()):
+        # q point expressed in previous frame
+        qs = torch.bmm(T[ei[0]-1,:-1,:-1].transpose(2,1), (q[ei[0]] - T[ei[0]-1,:-1,-1])[:,:,None])[:,:,0]
+
+        # compute angle approximation
+        theta[ei[0]-1] = torch.atan2(
+            -torch.bmm(A[ei[0]-1], qs[:,:,None])[:,0] + 1e-7,
+            torch.bmm(B[ei[0]-1], qs[:,:,None])[:,0] + 1e-7
+        ).reshape(-1)
+
+        rotmat = SE3_from(rotz(theta[ei[0]-1]))
+        T[ei[0]] = torch.bmm(torch.bmm(T[ei[0]-1], rotmat), T_rel[ei[0]-1])
+
+        ei, _ = remove_self_loops(ei + inc) # removes equivalent elements
+
+    ind = torch.arange(num_joints.sum(), device=device) + robot_ids.repeat_interleave(num_joints)
+
+    if T_final is not None:
+        T_th = torch.bmm(SE3_inv(T[joint_end_ind-1]), T_final)
+        theta[joint_end_ind-1] = theta[joint_end_ind-1] +  torch.atan2(T_th[:, 1, 0], T_th[:, 0, 0])
+        rotmat = SE3_from(rotz(theta[joint_end_ind-1]))
+        T[joint_end_ind] = torch.bmm(torch.bmm(T[joint_end_ind-1], rotmat), T_rel[joint_end_ind-1].expand(joint_end_ind.size(-1),-1,-1))
+
+    return theta[ind], T

@@ -235,10 +235,22 @@ def main(args):
                 T_goal = T_goal.as_matrix()
                 ee_ind = torch.cumsum(prob_data.num_joints.expand(num_samples_pre) + 1, dim=0) - 1 # end indices of joints
 
+                data.goal_data_repeated_per_node = torch.repeat_interleave(1, 2*data.num_joints + model.num_anchor_nodes, dim=0)
                 t0 = time.time()
                 # Compute solutions
-                P_all = (
-                    model.forward_eval(data, num_samples=num_samples_pre).to(device).detach()
+                # P_all = (
+                #     model.forward_eval(data, num_samples=num_samples_pre).to(device).detach()
+                # )
+                P_all = model.forward_eval(
+                    x=data.pos,
+                    h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1),
+                    edge_attr=data.edge_attr,
+                    edge_attr_partial=data.edge_attr_partial,
+                    edge_index=data.edge_index_full,
+                    partial_goal_mask=data.partial_goal_mask,
+                    nodes_per_single_graph = int(data.num_nodes / 1),
+                    num_samples=num_samples_pre,
+                    batch_size=data.num_graphs
                 )
 
                 # P_all = filter_by_distance(P_all, data, args.num_samples[0])
@@ -276,9 +288,9 @@ def main(args):
 
                 q_sols_ = q_sols_[ind[:args.num_samples[0]]]
                 e_pose = torch_log_from_T(torch.bmm(T_final_inv.expand(args.num_samples[0],-1,-1), T_ee[ind[:args.num_samples[0]]]))
-                e_pose_norm = torch.norm(e_pose, dim=-1).numpy()
-                e_pos_norm = torch.norm(e_pose[:,:3], dim=-1).numpy()
-                e_rot_norm = torch.norm(e_pose[:,3:], dim=-1).numpy()
+                e_pose_norm = torch.norm(e_pose, dim=-1).cpu().numpy()
+                e_pos_norm = torch.norm(e_pose[:,:3], dim=-1).cpu().numpy()
+                e_rot_norm = torch.norm(e_pose[:,3:], dim=-1).cpu().numpy()
                 for idx in range(args.num_samples[0]):
                     entry = {
                         "Id": kdx,
