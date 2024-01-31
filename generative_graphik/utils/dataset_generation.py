@@ -199,10 +199,10 @@ def generate_specific_robot_data(robots, num_examples, params):
             for field in struct_data.__dataclass_fields__:
                 all_struct_data.__dict__[field].append(getattr(struct_data, field))
 
-    q_lim_l_all = torch.from_numpy(np.concatenate(q_lim_l_all))
-    q_lim_u_all = torch.from_numpy(np.concatenate(q_lim_u_all))
     types = torch.cat(all_struct_data.type, dim=0)
     T0 = torch.cat(all_struct_data.T0, dim=0).reshape(-1, 4, 4)
+    q_lim_l_all = torch.from_numpy(np.concatenate(q_lim_l_all)).type(T0.dtype)
+    q_lim_u_all = torch.from_numpy(np.concatenate(q_lim_u_all)).type(T0.dtype)
     num_joints = torch.tensor(all_struct_data.num_joints)
     num_nodes = torch.tensor(all_struct_data.num_nodes)
     num_edges = torch.tensor(all_struct_data.num_edges)
@@ -216,6 +216,7 @@ def generate_specific_robot_data(robots, num_examples, params):
     all_struct_data = None
     # q = torch.rand(num_joints.sum(), dtype=T0.dtype) * 2 * torch.pi - torch.pi
     q = torch.rand(num_joints.sum(), dtype=T0.dtype) * (q_lim_u_all - q_lim_l_all) + q_lim_l_all
+    
     q[(num_joints).cumsum(dim=-1) - 1] = 0
     T = batchFKmultiDOF(T0, q, num_joints)
     P = batchPmultiDOF(T, num_joints)
