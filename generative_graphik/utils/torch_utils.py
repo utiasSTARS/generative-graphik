@@ -217,6 +217,7 @@ def batchIKmultiDOF(P: torch.Tensor, T0: torch.Tensor, num_joints: torch.Tensor,
     num_robots = num_joints.shape[0] # total number of robots
     num_nodes = 2*(num_joints+1) + (dim-1) # number of nodes for point graphs
     node_start_ind = torch.cumsum(num_nodes,dim=0) - num_nodes # start indices for nodes
+    node_start_ind = node_start_ind.to(device)
 
     # normalizes the node positions to the canonical coordinate system
     x_hat = (P[node_start_ind + 1] - P[node_start_ind])
