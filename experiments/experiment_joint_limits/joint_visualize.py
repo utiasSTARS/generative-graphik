@@ -10,7 +10,7 @@ import pandas as pd
 import seaborn as sns
 sns.set_theme(style="darkgrid")
 sns.set_style({"xtick.direction": "in","ytick.direction": "in"})
-sns.set(font_scale=2.00, rc={'text.usetex' : True, "font.family": "Computer Modern"})
+sns.set(font_scale=2.750, rc={'text.usetex' : True, "font.family": "Computer Modern"})
 params = ["xmajorticks=true", "ymajorticks=true", "xtick pos=left", "ytick pos=left"]
 import matplotlib.pyplot as plt
 

@@ -3,10 +3,13 @@ import json
 import os
 import sys
 import argparse
+import math
+
 from graphik.graphs import ProblemGraphRevolute
 from graphik.graphs.graph_revolute import list_to_variable_dict
 from graphik.robots import RobotRevolute
 
+import torch_geometric
 from torch_geometric.data import DataLoader
 from generative_graphik.utils.dataset_generation import generate_data_point
 
@@ -58,6 +61,7 @@ def main(args):
         # load models
         model_args = model_arg_loader(model_path)
         model = model.Model(model_args).to(device)
+        # model = torch_geometric.compile(model, fullgraph=True)
         name = model_args.id.replace("model", "results")
         c = np.pi / 180
 
@@ -76,43 +80,45 @@ def main(args):
                 limits_l = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
                 limits_u = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
                 limits = [limits_l, limits_u]
-                robot, graph = load_panda(limits=None)
+                robot, graph = load_panda(limits=limits)
                 fname = graphik.__path__[0] + "/robots/urdfs/panda_arm.urdf"
                 urdf_robot = RobotURDF(fname)
             else:
                 raise NotImplementedError
 
+            joint_limits = np.stack([limits_l, limits_u])
             for kdx in range(evals_per_robot):
                 sol_data = []
 
                 # Generate random problem
-                prob_data = generate_data_point(graph).to(device)
+                prob_data = generate_data_point(graph, joint_limits=joint_limits).to(device)
                 prob_data.num_graphs = 1
                 # T_goal = prob_data.T_ee.cpu().numpy()
                 data = model.preprocess(prob_data)
                 P_goal = data.pos.cpu().numpy()
-                T_goal = SE3.exp(data.T_ee.cpu().numpy())
-                # T_goal = SE3.exp(data.T_ee[0].cpu().numpy())
+                # T_goal = SE3.exp(data.T_ee.cpu().numpy())
+                T_goal = SE3.exp(data.T_ee[0].cpu().numpy())
+        
                 # q_goal = graph.joint_variables(graph_from_pos(P_goal, graph.node_ids))
                 # q_goal_np = np.fromiter(
                 #     (q_goal[f"p{jj}"] for jj in range(1, graph.robot.n + 1)), dtype=float
                 # )
 
-                P_all = model.forward_eval(data, num_samples=args.num_samples).cpu().detach().numpy()
+                # P_all = model.forward_eval(data, num_samples=args.num_samples).cpu().detach().numpy()
                 # Compute solutions
-                # P_all = (
-                #         model.forward_eval(
-                #             x=data.pos, 
-                #             h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1), 
-                #             edge_attr=data.edge_attr, 
-                #             edge_attr_partial=data.edge_attr_partial, 
-                #             edge_index=data.edge_index_full, 
-                #             partial_goal_mask=data.partial_goal_mask, 
-                #             nodes_per_single_graph= int(data.num_nodes / 1),
-                #             batch_size=1,
-                #             num_samples=args.num_samples
-                #         )
-                # )
+                P_all = (
+                        model.forward_eval(
+                            x=data.pos, 
+                            h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1), 
+                            edge_attr=data.edge_attr, 
+                            edge_attr_partial=data.edge_attr_partial, 
+                            edge_index=data.edge_index_full, 
+                            partial_goal_mask=data.partial_goal_mask, 
+                            nodes_per_single_graph= int(data.num_nodes / 1),
+                            batch_size=1,
+                            num_samples=args.num_samples
+                        )
+                ).cpu().detach().numpy()
 
                 # Analyze solutions
                 e_pose = np.empty([P_all.shape[0]])
@@ -131,10 +137,11 @@ def main(args):
                     q_sol = graph.joint_variables(
                         graph_from_pos(P, graph.node_ids), {robot.end_effectors[0]: T_goal}
                     )  # get joint angles
-
                     q_sols_np[idx] = np.fromiter(
                         (q_sol[f"p{jj}"] for jj in range(1, graph.robot.n + 1)), dtype=float
                     )
+                    # normalize to match panda joints and joint limits
+                    q_sols_np[idx][5] = q_sols_np[idx][5] % (2 * np.pi)
 
                     T_ee = graph.robot.pose(q_sol, robot.end_effectors[-1])
                     e_pose[idx] = np.linalg.norm(T_ee.inv().dot(T_goal).log())
