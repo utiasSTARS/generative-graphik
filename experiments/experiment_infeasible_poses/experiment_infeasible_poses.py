@@ -56,7 +56,7 @@ def find_infeasible_poses(args):
 
     # Pick the top N as seed poses and add random noise to find infeasible poses
     unfeasible_poses = []
-    for _ in range(1000):
+    for _ in range(args.n_poses):
 
         # Generate random problem
         prob_data = generate_data_point(graph).to(device)
@@ -79,7 +79,10 @@ def find_infeasible_poses(args):
                 break
 
         if qout is None:
-            print("None detected")
+            print("Failure detected")
+            unfeasible_poses.append(T_goal)
+
+    print(f"Total failures: {len(unfeasible_poses)} / {args.n_poses}")
 
 def parse_experiment_infeasible_poses_args():
     parser = argparse.ArgumentParser()
@@ -89,7 +92,7 @@ def parse_experiment_infeasible_poses_args():
     # parser.add_argument("--model_path", type=str, required=True, help="Path to folder with model data")
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for PyTorch')
     parser.add_argument("--robots", nargs="*", type=str, default=["panda"], help="Robots to test on")
-    parser.add_argument("--n_infeasible_poses", type=int, default=1000, help="Number of infeasible poses to test on")
+    parser.add_argument("--n_poses", type=int, default=1000, help="Number of poses to search")
     parser.add_argument("--translational_noise", type=float, default=0.2, help="Noise in metres to add.")
     args = parser.parse_args()
     return args
