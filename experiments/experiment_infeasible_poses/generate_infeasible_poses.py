@@ -103,7 +103,7 @@ def find_infeasible_poses(args):
             # Dump the list of NumPy arrays into the file
             pickle.dump(infeasible_poses, f)
 
-def parse_experiment_infeasible_poses_args():
+def parse_generate_infeasible_poses_args():
     parser = argparse.ArgumentParser()
 
     # General settings
@@ -116,5 +116,5 @@ def parse_experiment_infeasible_poses_args():
 
 if __name__ == "__main__":
     random.seed(3)
-    args = parse_experiment_infeasible_poses_args()
+    args = parse_generate_infeasible_poses_args()
     infeasible_poses = find_infeasible_poses(args)
