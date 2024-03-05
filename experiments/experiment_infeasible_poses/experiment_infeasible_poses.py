@@ -6,11 +6,15 @@ from argparse import Namespace
 import json
 import pickle
 import numpy as np
+import sys
 
 import torch
 from torch_geometric.data import InMemoryDataset
+from liegroups.numpy import SE3
+import pandas as pd
 
 import graphik
+from graphik.utils.dgp import graph_from_pos
 from graphik.utils.roboturdf import (
     RobotURDF,
     load_ur10,
@@ -38,6 +42,7 @@ def run_experiment_infeasible_poses(args):
     infeasible_pose_paths = args.infeasible_pose_paths
     dataset_paths = args.dataset_paths
 
+    all_sol_data = []
     # Initialize tracIK
     for robot_type, model_path, infeasible_pose_path, dataset_path in zip(robot_types, model_paths, infeasible_pose_paths, dataset_paths):
         
@@ -58,13 +63,10 @@ def run_experiment_infeasible_poses(args):
             infeasible_poses.append(infeasible_pose)
         infeasible_poses = np.concatenate(infeasible_poses)
 
-        # Load dataset to compare to
+        # Load dataset poses to compare to
         with open(os.path.join(dataset_path, "np_poses.pkl"), 'rb') as f:
             dataset_poses = pickle.load(f)
 
-        print(infeasible_poses.shape)
-        print(dataset_poses.shape)
-        assert 0
         # Load problem
         if robot_type == "ur10":
             robot, graph = load_ur10(limits=None)
@@ -89,21 +91,78 @@ def run_experiment_infeasible_poses(args):
         else:
             raise NotImplementedError
         
-        print(type(infeasible_poses))
-        print(type(reference_dataset))
-        # prob_data = generate_data_point_from_pose(graph).to(args.device)
-        # prob_data.num_graphs = 1
+        sol_data = []        
+        for kdx, infeasible_pose in enumerate(infeasible_poses):
+            print(robot_type, f"{kdx + 1} / {len(infeasible_poses)}")
+            prob_data = generate_data_point_from_pose(graph, infeasible_pose).to(args.device)
+            prob_data.num_graphs = 1
+            data = model.preprocess(prob_data)
+            num_samples_pre = args.num_samples * 4
+            T_goal = SE3.from_matrix(infeasible_pose)
+
+            # Compute solutions
+            P_all = (
+                model.forward_eval(
+                    x_partial=data.pos_partial, 
+                    h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1), 
+                    edge_attr_partial=data.edge_attr_partial, 
+                    edge_index=data.edge_index_full, 
+                    nodes_per_single_graph= int(data.num_nodes / 1),
+                    batch_size=1,
+                    num_samples=num_samples_pre
+                )
+            ).cpu().detach().numpy()
+
+            # Analyze solutions
+            e_pose = np.empty([P_all.shape[0]])
+            e_pos = np.empty([P_all.shape[0]])
+            e_rot = np.empty([P_all.shape[0]])
+            q_sols_np = np.empty([P_all.shape[0], robot.n])
+            for idx in range(P_all.shape[0]):
+                P = P_all[idx, :]
+
+                q_sol = graph.joint_variables(
+                    graph_from_pos(P, graph.node_ids), {robot.end_effectors[0]: T_goal}
+                )  # get joint angles
+
+                q_sols_np[idx] = np.fromiter(
+                    (q_sol[f"p{jj}"] for jj in range(1, graph.robot.n + 1)), dtype=float
+                )
+
+                T_ee = graph.robot.pose(q_sol, robot.end_effectors[-1])
+                e_pose[idx] = np.linalg.norm(T_ee.inv().dot(T_goal).log())
+                e_pos[idx] = np.linalg.norm(T_ee.trans - T_goal.trans)
+                e_rot[idx] = np.linalg.norm(T_ee.rot.inv().dot(T_goal.rot).log())
+            idx_sorted = np.argsort(e_pose)
+
+            for ii in idx_sorted[:args.num_samples]:
+                entry = {
+                    "Id": kdx,
+                    "Robot": robot_type,
+                    "Goal Pose": T_goal.as_matrix(),
+                    "Sol. Config": q_sols_np[ii],
+                    "Err. Pose": e_pose[ii],
+                    "Err. Position": e_pos[ii],
+                    "Err. Rotation": e_rot[ii],
+                }
+                sol_data.append(entry)
+            all_sol_data.append(pd.DataFrame(sol_data))
+
+    pd_data = pd.concat(all_sol_data)
+    exp_dir = f"{sys.path[0]}/results/"
+    os.makedirs(exp_dir, exist_ok=True)
+    pd_data.to_pickle(os.path.join(exp_dir, "results.pkl"))
 
 def parse_experiment_infeasible_poses_args():
     parser = argparse.ArgumentParser()
 
     # General settings
     parser.add_argument("--model_paths", nargs="*", type=str, default=["/home/olimoyo/generative-graphik/saved_models/paper_models/kuka_512k_model"], help="Path to folder with model")
-    parser.add_argument("--infeasible_pose_paths", nargs="*", type=str, default="/home/olimoyo/generative-graphik/datasets/infeasible_poses/infeasible_poses_kuka.pkl", help="Path to folder with infeasible poses to test with.")
+    parser.add_argument("--infeasible_pose_paths", nargs="*", type=str, default=["/home/olimoyo/generative-graphik/datasets/infeasible_poses/infeasible_poses_kuka.pkl"], help="Path to folder with infeasible poses to test with.")
     parser.add_argument("--robots", nargs="*", type=str, default=["kuka"], help="Robots to test on")
-    parser.add_argument("--dataset_paths", nargs="*", type=str, default="/media/stonehenge/users/oliver-limoyo/2.56m-kuka", help="Path to folder with infeasible poses to test with.")
+    parser.add_argument("--dataset_paths", nargs="*", type=str, default=["/media/stonehenge/users/oliver-limoyo/2.56m-kuka"], help="Path to folder with infeasible poses to test with.")
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for PyTorch')
-
+    parser.add_argument("--num_samples", type=int, default=32, help="Total number of samples per problem")
     args = parser.parse_args()
     return args
 
