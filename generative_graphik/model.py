@@ -1,4 +1,5 @@
 import random
+import time
 
 import torch
 import torch.nn as nn
@@ -129,16 +130,19 @@ class Model(nn.Module):
 
     def preprocess(self, data):
         data["edge_index_full"] = data.edge_index_full.type(torch.long)
-        data["edge_attr_partial"] = data.edge_attr[data.partial_mask]
-        data["edge_attr_partial_full"] = data.partial_mask.unsqueeze(-1) * data.edge_attr
+        data["edge_index_partial"] = data.edge_index_full[:, data.partial_mask].type(torch.long)
+        # data["edge_attr_partial"] = data.edge_attr[data.partial_mask]
+        data["edge_attr_partial"] = data.partial_mask.unsqueeze(-1) * data.edge_attr
         data["T_ee"] = torch_log_from_T(data.T_ee)
+        #XXX: Hacky workaround since LieGroups doesn't handle batch_size=1
+        if data["T_ee"].dim() == 1:
+            data["T_ee"] = data["T_ee"].unsqueeze(0)
+        dim = data.T_ee.shape[-1]//3 + 1
+        data["goal_data_repeated_per_node"] = torch.repeat_interleave(data.T_ee, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
         return data
 
-    def loss(self, res, epoch):
-        goal_pos = res["goal_pos"]
-        batch_size = res["batch_size"]
+    def loss(self, res, epoch, batch_size, goal_pos, partial_goal_mask):
         mu_x_sample = res["mu_x_sample"]
-        partial_goal_mask = res["partial_goal_mask"]
         partial_non_goal_mask = torch.ones_like(partial_goal_mask) - partial_goal_mask
         beta_kl = min(((epoch + 1) / self.n_beta_scaling_epoch), 1.0)
         stats = {}
@@ -174,35 +178,26 @@ class Model(nn.Module):
         stats["total_l"] = loss.item()
         return loss_opt, stats
 
-    def forward(self, data):
-        batch_size = data.num_graphs
-        nodes_per_single_graph = int(data.num_nodes / batch_size)
-        partial_goal_mask = data.partial_goal_mask
-        dim = data.T_ee.shape[-1]//3 + 1
-
-        goal_data_repeated_per_node = torch.repeat_interleave(data.T_ee, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
-
+    def forward(self, x, h, edge_attr, edge_attr_partial, edge_index, partial_goal_mask):
         # Goal T_g encoder, all edge attributes (distances)
         z_goal = self.goal_config_encoder(
-            x=data.pos,
-            h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-            edge_attr=data.edge_attr,
-            edge_index=data.edge_index_full,
+            x=x,
+            h=h,
+            edge_attr=edge_attr,
+            edge_index=edge_index,
         )
         
         # AlphaFold style sampling of iterations to encourage fast convergence
         num_iterations = random.randint(1, self.max_num_iterations)
 
-        nodes = partial_goal_mask[:, None] * data.pos
-        edges = data.edge_attr_partial_full
-        for ii in range(num_iterations):
+        for _ in range(num_iterations):
 
             # unknown distances and positions transformed to 0
             z_goal_partial = self.goal_partial_config_encoder(
-                x=nodes,
-                h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-                edge_attr=edges,
-                edge_index=data.edge_index_full,
+                x=partial_goal_mask[:, None] * x,
+                h=h,
+                edge_attr=edge_attr_partial,
+                edge_index=edge_index,
             )
 
             # Encode conditional prior p(z | c)
@@ -231,9 +226,9 @@ class Model(nn.Module):
             ), dim=-1)
             mu_x_sample = self.decoder(
                 x=inp_decoder,
-                h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-                edge_attr=0.0 * data.edge_attr,
-                edge_index=data.edge_index_full,
+                h=h,
+                edge_attr=0.0 * edge_attr,
+                edge_index=edge_index,
             )
 
             # Decode distribution p(x | z, c) if we're going to iterate
@@ -245,53 +240,39 @@ class Model(nn.Module):
                 ), dim=-1)
                 mu_x_sample_prior = self.decoder(
                     x=inp_decoder_prior,
-                    h=torch.cat((data.type, goal_data_repeated_per_node), dim=-1),
-                    edge_attr=0.0 * data.edge_attr,
-                    edge_index=data.edge_index_full,
+                    h=h,
+                    edge_attr=0.0 * edge_attr,
+                    edge_index=edge_index,
                 )
                 nodes = mu_x_sample_prior
-                src, dst = data.edge_index_full  
+                src, dst = edge_index  
                 edges = ((nodes[src] - nodes[dst])**2).sum(dim=-1).sqrt()
                 edges = edges.unsqueeze(-1)
 
-        return {"mu_x_sample": mu_x_sample,
-                "nodes_per_single_graph": nodes_per_single_graph,
-                "qz_xc": qz_xc,
-                "pz_c": pz_c,
-                "goal_pos": data.pos,
-                "partial_goal_mask": partial_goal_mask,
-                "edge_index_full": data.edge_index_full,
-                # "edge_index_partial": data.edge_index_partial,
-                "batch_size": batch_size,
-                "T0": data.M,
-                "num_joints": data.num_joints,
-                "q_goal": data.q_goal}
+        return {
+            "mu_x_sample": mu_x_sample,
+            "qz_xc": qz_xc,
+            "pz_c": pz_c
+        }
 
-    def forward_eval(self, data, num_samples=1):
-        batch_size = data.num_graphs
-        nodes_per_single_graph = int(data.num_nodes / batch_size)
-        partial_goal_mask = data.partial_goal_mask
-        dim = data.T_ee.shape[-1]//3 + 1
-
-        if batch_size == 1:
-            inp = data.T_ee.unsqueeze(0)
-        goal_data_repeated_per_node = torch.repeat_interleave(inp, (dim-1)*data.num_joints + self.num_anchor_nodes, dim=0)
-
-        nodes = partial_goal_mask[:, None] * data.pos
-        edges = data.edge_attr_partial_full
-        data_type = data.type
-        data_index = data.edge_index_full
+    def forward_eval(self, x, h, edge_attr, edge_attr_partial, edge_index, partial_goal_mask, nodes_per_single_graph, num_samples, batch_size):
         for ii in range(self.max_num_iterations):
             with torch.no_grad():
                 # unknown distances and positions transformed to 0
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 z_goal_partial = self.goal_partial_config_encoder(
-                    x=nodes,
-                    h=torch.cat((data_type, goal_data_repeated_per_node), dim=-1),
-                    edge_attr=edges,
-                    edge_index=data_index,
+                    x=partial_goal_mask[:, None] * x,
+                    h=h,
+                    edge_attr=edge_attr_partial,
+                    edge_index=edge_index,
                 )
-                
+                # torch.cuda.synchronize()
+                # print(f"Goal encoder time: {time.time() - tic}")
+
                 # Encode conditional prior p(z | c)
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 if self.train_prior:
                     params = self.prior_encoder(z_goal_partial)
                     pz_c =  self.pz_c_dist(*params)
@@ -300,25 +281,31 @@ class Model(nn.Module):
                         loc=torch.zeros((batch_size * nodes_per_single_graph, z_goal_partial.shape[-1])).to(device=z_goal_partial.device),
                         scale=torch.ones((batch_size * nodes_per_single_graph, z_goal_partial.shape[-1])).to(device=z_goal_partial.device),
                     )
+                # torch.cuda.synchronize()
+                # print(f"Prior encoder time: {time.time() - tic}")
 
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 # Repeat data num_samples times
                 if ii == 0:
                     z_prior = pz_c.sample([num_samples])
                     z_prior = z_prior.reshape(-1, z_prior.shape[-1])
-                    z_goal_partial = z_goal_partial.unsqueeze(0).repeat(num_samples, 1, 1)
+                    z_goal_partial = z_goal_partial.unsqueeze(0).expand(num_samples, -1, -1)
                     z_goal_partial = z_goal_partial.reshape(-1, z_goal_partial.shape[-1])
-                    data_type = data.type.unsqueeze(0).repeat(num_samples, 1, 1)
-                    data_type = data_type.reshape(-1, data_type.shape[-1])
-                    goal_data_repeated_per_node = goal_data_repeated_per_node.unsqueeze(0).repeat(num_samples, 1, 1)
-                    goal_data_repeated_per_node = goal_data_repeated_per_node.reshape(-1, goal_data_repeated_per_node.shape[-1])
-                    data_index = data.edge_index_full
+                    h = h.unsqueeze(0).expand(num_samples,-1,-1)    
+                    h = h.reshape(-1, h.shape[-1])
+                    data_index = edge_index
                     data_index = repeat_offset_index(data_index, num_samples, nodes_per_single_graph)
                     data_index = data_index.reshape(data_index.shape[0], -1)
-                    data_edge_attr = data.edge_attr.unsqueeze(0).repeat(num_samples, 1, 1)
+                    data_edge_attr = edge_attr.unsqueeze(0).expand(num_samples, -1, -1)
                     data_edge_attr = data_edge_attr.reshape(-1, data_edge_attr.shape[-1])
                 else:
                     z_prior = pz_c.sample()
-                
+                # torch.cuda.synchronize()
+                # print(f"Sampling time: {time.time() - tic}")
+
+                # tic = time.time()
+                # torch.cuda.synchronize()
                 # Decode distribution p(x | z, c)
                 inp_decoder_prior = torch.cat((
                     z_prior,
@@ -326,10 +313,12 @@ class Model(nn.Module):
                 ), dim=-1)
                 mu_x_sample = self.decoder(
                     x=inp_decoder_prior,
-                    h=torch.cat((data_type, goal_data_repeated_per_node), dim=-1),
+                    h=h,
                     edge_attr=0.0 * data_edge_attr,
                     edge_index=data_index,
                 )
+                # torch.cuda.synchronize()
+                # print(f"Decoder time: {time.time() - tic}")
 
                 if self.max_num_iterations > 1 and self.train_prior:
                     nodes = mu_x_sample

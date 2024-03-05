@@ -9,6 +9,7 @@ from torch_geometric.data import InMemoryDataset, Data
 import torch.multiprocessing as mp
 
 import graphik
+from graphik.robots import RobotRevolute
 from graphik.graphs import ProblemGraphRevolute
 from graphik.graphs.graph_revolute import random_revolute_robot_graph
 import generative_graphik
@@ -147,36 +148,46 @@ def generate_specific_robot_data(robots, num_examples, params):
         T0=[],
     )
 
+    q_lim_l_all = []
+    q_lim_u_all = []
+
     for robot_name in robots:
         # generate data for robot like ur10, kuka etc.
         if robot_name == "ur10":
             # randomize won't work on ur10
             # robot, graph = load_ur10(limits=None, randomized_links = False)
             fname = graphik.__path__[0] + "/robots/urdfs/ur10_mod.urdf"
-            q_lim = np.pi * np.ones(6)
+            q_lim_l = -np.pi * np.ones(6)
+            q_lim_u = np.pi * np.ones(6)
         elif robot_name == "kuka":
             # robot, graph = load_kuka(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
             fname = graphik.__path__[0] + "/robots/urdfs/kuka_iiwr.urdf"
-            q_lim = np.pi * np.ones(7)
+            q_lim_l = -np.pi * np.ones(7)
+            q_lim_u = np.pi * np.ones(7)
         elif robot_name == "lwa4d":
             # robot, graph = load_schunk_lwa4d(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
             fname = graphik.__path__[0] + "/robots/urdfs/lwa4d.urdf"
-            q_lim = np.pi * np.ones(7)
+            q_lim_l = -np.pi * np.ones(7)
+            q_lim_u = np.pi * np.ones(7)
         elif robot_name == "panda":
             # robot, graph = load_schunk_lwa4d(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
             fname = graphik.__path__[0] + "/robots/urdfs/panda_arm.urdf"
-            q_lim = np.pi * np.ones(7)
+            # q_lim_l = -np.pi * np.ones(7)
+            # q_lim_u = np.pi * np.ones(7)
+            q_lim_l = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973])
+            q_lim_u = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
         elif robot_name == "lwa4p":
             # robot, graph = load_schunk_lwa4p(limits=None, randomized_links = params["randomize"], randomize_percentage=0.2)
             fname = graphik.__path__[0] + "/robots/urdfs/lwa4p.urdf"
-            q_lim = np.pi * np.ones(6)
+            q_lim_l = -np.pi * np.ones(6)
+            q_lim_u = np.pi * np.ones(6)
         else:
             raise NotImplementedError
 
         urdf_robot = RobotURDF(fname)
         robot = urdf_robot.make_Revolute3d(
-            -q_lim,
-            q_lim,
+            q_lim_l,
+            q_lim_u,
             randomized_links=params["randomize"],
             randomize_percentage=params["randomize_percentage"],
         )  # make the Revolute class from a URDF
@@ -184,11 +195,15 @@ def generate_specific_robot_data(robots, num_examples, params):
         struct_data = generate_struct_data(graph)
 
         for _ in tqdm(range(examples_per_robot), leave=False):
+            # q_lim_l_all.append(q_lim_l)
+            # q_lim_u_all.append(q_lim_u)
             for field in struct_data.__dataclass_fields__:
                 all_struct_data.__dict__[field].append(getattr(struct_data, field))
 
     types = torch.cat(all_struct_data.type, dim=0)
     T0 = torch.cat(all_struct_data.T0, dim=0).reshape(-1, 4, 4)
+    # q_lim_l_all = torch.from_numpy(np.concatenate(q_lim_l_all)).type(T0.dtype)
+    # q_lim_u_all = torch.from_numpy(np.concatenate(q_lim_u_all)).type(T0.dtype)
     num_joints = torch.tensor(all_struct_data.num_joints)
     num_nodes = torch.tensor(all_struct_data.num_nodes)
     num_edges = torch.tensor(all_struct_data.num_edges)
@@ -200,12 +215,14 @@ def generate_specific_robot_data(robots, num_examples, params):
 
     # delete struct data
     all_struct_data = None
-
     q = torch.rand(num_joints.sum(), dtype=T0.dtype) * 2 * torch.pi - torch.pi
+    # q = torch.rand(num_joints.sum(), dtype=T0.dtype) * (q_lim_u_all - q_lim_l_all) + q_lim_l_all
+    
     q[(num_joints).cumsum(dim=-1) - 1] = 0
     T = batchFKmultiDOF(T0, q, num_joints)
     P = batchPmultiDOF(T, num_joints)
-    T_ee = T[num_joints.cumsum(dim=-1)]
+    # T_ee = T[num_joints.cumsum(dim=-1)]
+    T_ee = T[torch.cumsum(num_joints + 1, dim=0) - 1]
     offset_full = (
         torch.cat([torch.tensor([0]), num_nodes[:-1].cumsum(dim=-1)])
         .repeat_interleave(num_edges, dim=-1)
@@ -248,7 +265,6 @@ def generate_specific_robot_data(robots, num_examples, params):
         M=T0,
         q_goal=q,
     )
-
     return data, slices
 
 
@@ -403,7 +419,7 @@ def main(args):
 
         dataset = CachedDataset(data, slices)
 
-        with open(storage_path + "data_" + f"{idx}" + ".p", "wb") as f:
+        with open(os.path.join(storage_path, "data_" + f"{idx}" + ".p"), "wb") as f:
             torch.save(dataset, f)
 
     num_val_examples = int(

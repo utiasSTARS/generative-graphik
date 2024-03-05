@@ -16,6 +16,7 @@ def parse_training_args():
     parser.add_argument('--storage_base_path', type=str, required=True, help='Base path to store all training data')
     parser.add_argument('--training_data_path', type=str, default="planar_chain_size_20000_dof_[5, 7, 9, 11]_randomize_True_partial_True_approx_edges_False_data.p", help='Path to training data')
     parser.add_argument('--validation_data_path', type=str, default="planar_chain_size_20000_dof_[5, 7, 9, 11]_randomize_True_partial_True_approx_edges_False_data.p", help='Path to training data')
+    parser.add_argument('--pretrained_weights_path', type=str, default=None, help='Path to pretrained weights')
     parser.add_argument('--module_path', type=str, default="none", help='Path to network module.')
 
     # Training Settings
@@ -76,6 +77,25 @@ def parse_data_generation_args():
     parser.add_argument("--validation_percentage", type=int, default=10, help="Percentage of validation data")
     parser.add_argument("--num_samples", type=int, default=100, help="Total number of samples per problem")
     parser.add_argument("--max_examples_per_file", type=int, default=512, help="Max number of problems per file in the dataset")
+
+    args = parser.parse_args()
+    return args
+
+def parse_analysis_args():
+    parser = argparse.ArgumentParser()
+
+    # General settings
+    parser.add_argument("--id", type=str, default="test_experiment", help="Name of the folder with experiment data")
+    parser.add_argument('--storage_base_path', type=str, default=None, help='Base path for folder with experiment data')
+    parser.add_argument("--model_path", nargs="*", type=str, required=True, help="Path to folder with model data")
+    parser.add_argument('--device', type=str, default='cpu', help='Device to use for PyTorch')
+    parser.add_argument("--num_samples", nargs="*", type=int, default=1, help="Number of samples to generate")
+
+    # Robot settings
+    parser.add_argument("--robots", nargs="*", type=str, default=["planar_chain"], help="Numbers of DoF that are validated")
+    parser.add_argument("--dofs", nargs="*", type=int, default=[6,8,10,12], help="Numbers of DoF that are validated")
+    parser.add_argument("--n_evals", type=int, default=100, help="Number of evaluations")
+    parser.add_argument("--randomize", type=str2bool, default=True, help="Randomize link lengths during test time.")
 
     args = parser.parse_args()
     return args
