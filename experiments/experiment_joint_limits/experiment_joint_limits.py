@@ -93,27 +93,19 @@ def main(args):
                 # Generate random problem
                 prob_data = generate_data_point(graph, joint_limits=joint_limits).to(device)
                 prob_data.num_graphs = 1
-                # T_goal = prob_data.T_ee.cpu().numpy()
                 data = model.preprocess(prob_data)
-                P_goal = data.pos.cpu().numpy()
+
                 # T_goal = SE3.exp(data.T_ee.cpu().numpy())
                 T_goal = SE3.exp(data.T_ee[0].cpu().numpy())
-        
-                # q_goal = graph.joint_variables(graph_from_pos(P_goal, graph.node_ids))
-                # q_goal_np = np.fromiter(
-                #     (q_goal[f"p{jj}"] for jj in range(1, graph.robot.n + 1)), dtype=float
-                # )
 
                 # P_all = model.forward_eval(data, num_samples=args.num_samples).cpu().detach().numpy()
                 # Compute solutions
                 P_all = (
                         model.forward_eval(
-                            x=data.pos, 
+                            x_partial=data.pos_partial, 
                             h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1), 
-                            edge_attr=data.edge_attr, 
                             edge_attr_partial=data.edge_attr_partial, 
                             edge_index=data.edge_index_full, 
-                            partial_goal_mask=data.partial_goal_mask, 
                             nodes_per_single_graph= int(data.num_nodes / 1),
                             batch_size=1,
                             num_samples=args.num_samples
@@ -127,13 +119,7 @@ def main(args):
                 q_sols_np = np.empty([P_all.shape[0], robot.n])
                 for idx in range(P_all.shape[0]):
                     P = P_all[idx, :]
-                    # q_sol = batchIKmultiDOF(
-                    #     P, 
-                    #     prob_data.T0, 
-                    #     prob_data.num_joints, 
-                    #     T_final = torch.tensor(T_goal.as_matrix(), dtype=P.dtype).unsqueeze(0).to(device)
-                    # )
-
+    
                     q_sol = graph.joint_variables(
                         graph_from_pos(P, graph.node_ids), {robot.end_effectors[0]: T_goal}
                     )  # get joint angles
@@ -153,12 +139,9 @@ def main(args):
                         "Robot": robot_type,
                         "Goal Pose": T_goal.as_matrix(),
                         "Sol. Config": q_sols_np[idx],
-                        # "Sol. Points": P_all[idx,:],
                         "Err. Pose": e_pose[idx],
                         "Err. Position": e_pos[idx],
                         "Err. Rotation": e_rot[idx],
-                        # "Goal Config": q_goal_np,
-                        # "Goal Points": P_goal,
                     }
                     sol_data.append(entry)
                 all_sol_data.append(pd.DataFrame(sol_data))
@@ -170,8 +153,7 @@ def main(args):
         pd_data.to_pickle(os.path.join(exp_dir, "results.pkl"))
 
 
-if __name__ == "__main__":
-    random.seed(17)
+def parse_experiment_joint_limits_args():
     parser = argparse.ArgumentParser()
 
     # General settings
@@ -183,4 +165,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=1, help="Total number of samples per problem")
 
     args = parser.parse_args()
+    return args
+
+if __name__ == "__main__":
+    random.seed(17)
+    args = parse_experiment_joint_limits_args()
     main(args)
