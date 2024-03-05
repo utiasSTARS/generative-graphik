@@ -36,17 +36,18 @@ def main(args):
     stats = stats.drop(["count", "std", "50%"], axis=1, level=1)
 
     perc_data = data.set_index(["Robot", "Id"])
-    # perc_data["Success"] = (
-    #     (perc_data["Err. Position"] < 0.01) & (perc_data["Err. Rotation"] < (180/np.pi))
-    # )
-    # suc_pos_perc = (
-    #     perc_data["Success"]
-    #     .eq(True)
-    #     .groupby(level=[0, 1])
-    #     .value_counts(True)
-    #     .unstack(fill_value=0)
-    # )
-    # stats["Success [\%]"] = suc_pos_perc.groupby(level=0).apply(lambda c: (c>0).sum()/len(c))[True]*100
+    perc_data["Success"] = (
+        (perc_data["Err. Position"] < 0.01) & (perc_data["Err. Rotation"] < (180/np.pi))
+    )
+    print(perc_data["Err. Position"])
+    suc_pos_perc = (
+        perc_data["Success"]
+        .eq(True)
+        .groupby(level=[0, 1])
+        .value_counts(True)
+        .unstack(fill_value=0)
+    )
+    stats["Success [\%]"] = suc_pos_perc.groupby(level=0).apply(lambda c: (c>0).sum()/len(c))[True]*100
 
     stats.rename(columns = {'75%': 'Q$_{3}$', '25%': 'Q$_{1}$','Err. Position':'Err. Pos. [mm]', 'Err. Rotation':'Err. Rot. [deg]'}, inplace = True)
 
