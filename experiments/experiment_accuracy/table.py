@@ -39,7 +39,6 @@ def main(args):
     perc_data["Success"] = (
         (perc_data["Err. Position"] < 0.01) & (perc_data["Err. Rotation"] < (180/np.pi))
     )
-    print(perc_data["Err. Position"])
     suc_pos_perc = (
         perc_data["Success"]
         .eq(True)
