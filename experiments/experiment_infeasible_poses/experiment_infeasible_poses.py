@@ -40,11 +40,10 @@ def run_experiment_infeasible_poses(args):
     robot_types = args.robots
     model_paths = args.model_paths
     infeasible_pose_paths = args.infeasible_pose_paths
-    dataset_paths = args.dataset_paths
 
     all_sol_data = []
     # Initialize tracIK
-    for robot_type, model_path, infeasible_pose_path, dataset_path in zip(robot_types, model_paths, infeasible_pose_paths, dataset_paths):
+    for robot_type, model_path, infeasible_pose_path in zip(robot_types, model_paths, infeasible_pose_paths):
         
         # Load model
         spec = importlib.util.spec_from_file_location("model", os.path.join(model_path, "model.py"))
@@ -62,10 +61,6 @@ def run_experiment_infeasible_poses(args):
             infeasible_pose = infeasible_pose[None, ...]
             infeasible_poses.append(infeasible_pose)
         infeasible_poses = np.concatenate(infeasible_poses)
-
-        # Load dataset poses to compare to
-        with open(os.path.join(dataset_path, "np_poses.pkl"), 'rb') as f:
-            dataset_poses = pickle.load(f)
 
         # Load problem
         if robot_type == "ur10":
@@ -94,23 +89,25 @@ def run_experiment_infeasible_poses(args):
         sol_data = []        
         for kdx, infeasible_pose in enumerate(infeasible_poses):
             print(robot_type, f"{kdx + 1} / {len(infeasible_poses)}")
-            prob_data = generate_data_point_from_pose(graph, infeasible_pose).to(args.device)
+            T_goal = SE3.from_matrix(infeasible_pose)
+            prob_data = generate_data_point_from_pose(graph, T_goal).to(args.device)
             prob_data.num_graphs = 1
             data = model.preprocess(prob_data)
             num_samples_pre = args.num_samples * 4
-            T_goal = SE3.from_matrix(infeasible_pose)
 
             # Compute solutions
             P_all = (
-                model.forward_eval(
-                    x_partial=data.pos_partial, 
-                    h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1), 
-                    edge_attr_partial=data.edge_attr_partial, 
-                    edge_index=data.edge_index_full, 
-                    nodes_per_single_graph= int(data.num_nodes / 1),
-                    batch_size=1,
-                    num_samples=num_samples_pre
-                )
+                    model.forward_eval(
+                        x=data.pos, 
+                        h=torch.cat((data.type, data.goal_data_repeated_per_node), dim=-1), 
+                        edge_attr=data.edge_attr, 
+                        edge_attr_partial=data.edge_attr_partial, 
+                        edge_index=data.edge_index_full, 
+                        partial_goal_mask=data.partial_goal_mask, 
+                        nodes_per_single_graph= int(data.num_nodes / 1),
+                        batch_size=1,
+                        num_samples=num_samples_pre
+                    )
             ).cpu().detach().numpy()
 
             # Analyze solutions
@@ -160,7 +157,6 @@ def parse_experiment_infeasible_poses_args():
     parser.add_argument("--model_paths", nargs="*", type=str, default=["/home/olimoyo/generative-graphik/saved_models/paper_models/kuka_512k_model"], help="Path to folder with model")
     parser.add_argument("--infeasible_pose_paths", nargs="*", type=str, default=["/home/olimoyo/generative-graphik/datasets/infeasible_poses/infeasible_poses_kuka.pkl"], help="Path to folder with infeasible poses to test with.")
     parser.add_argument("--robots", nargs="*", type=str, default=["kuka"], help="Robots to test on")
-    parser.add_argument("--dataset_paths", nargs="*", type=str, default=["/media/stonehenge/users/oliver-limoyo/2.56m-kuka"], help="Path to folder with infeasible poses to test with.")
     parser.add_argument('--device', type=str, default='cpu', help='Device to use for PyTorch')
     parser.add_argument("--num_samples", type=int, default=32, help="Total number of samples per problem")
     args = parser.parse_args()

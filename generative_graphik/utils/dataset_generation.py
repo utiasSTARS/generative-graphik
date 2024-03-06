@@ -27,8 +27,10 @@ from graphik.utils import (
     OBSTACLE,
     POS,
     TYPE,
+    distance_matrix_from_graph
 )
 from graphik.utils.roboturdf import RobotURDF
+import networkx as nx
 
 TYPE_ENUM = {
     BASE: np.asarray([1, 0, 0]),
@@ -55,6 +57,37 @@ class StructData:
     edge_index_full: Union[List[torch.Tensor], torch.Tensor]
     T0: Union[List[torch.Tensor], torch.Tensor]
 
+def generate_data_point_from_pose(graph, T_ee):
+    struct_data = generate_struct_data(graph)
+    num_joints = torch.tensor([struct_data.num_joints])
+    edge_index_full = struct_data.edge_index_full
+    T0 = struct_data.T0
+
+    # Build partial graph nodes
+    G_partial = graph.from_pose(T_ee)
+    T_ee = torch.from_numpy(T_ee.as_matrix()).type(torch.float32)
+    P = np.array([p[1] for p in list(G_partial.nodes.data('pos', default=np.array([0,0,0])))])
+    P = torch.from_numpy(P).type(torch.float32)
+
+    # Build distances of partial graph
+    distances = np.sqrt(distance_matrix_from_graph(G_partial))
+    # Remove self-loop
+    distances = distances[~np.eye(distances.shape[0],dtype=bool)].reshape(distances.shape[0],-1)
+    distances = torch.from_numpy(distances).type(torch.float32)
+    # Remove filler NetworkX extra 1s
+    distances = struct_data.partial_mask * distances.reshape(-1)
+    return Data(
+        pos=P,
+        edge_index_full=edge_index_full.type(torch.int32),
+        edge_attr=distances.unsqueeze(1),
+        T_ee=T_ee,
+        num_joints=num_joints.type(torch.int32),
+        q_goal=None,
+        partial_mask=struct_data.partial_mask,
+        partial_goal_mask=struct_data.partial_goal_mask,
+        type=struct_data.type,
+        T0=struct_data.T0,
+    )
 
 def generate_data_point(graph):
     struct_data = generate_struct_data(graph)
@@ -71,18 +104,17 @@ def generate_data_point(graph):
     distances = torch.linalg.norm(
         P[edge_index_full[0], :] - P[edge_index_full[1], :], dim=-1
     )
-
     return Data(
-        type=struct_data.type,
         pos=P,
+        edge_index_full=edge_index_full.type(torch.int32),
         edge_attr=distances.unsqueeze(1),
         T_ee=T_ee,
         num_joints=num_joints.type(torch.int32),
+        q_goal=q,
         partial_mask=struct_data.partial_mask,
         partial_goal_mask=struct_data.partial_goal_mask,
-        edge_index_full=edge_index_full.type(torch.int32),
+        type=struct_data.type,
         T0=struct_data.T0,
-        q_goal=q,
     )
 
 
