@@ -55,7 +55,7 @@ class ApiTests(unittest.TestCase):
             for key in T_zero:
                 self.assertTrue(np.allclose(T_zero[key].as_matrix(), T_zero_reconstructed[key].as_matrix()))
 
-    def test_ik_api(self, nR: int = 16, nG: int = 16, samples: int = 16, dof: int = 6):
+    def test_ik_api(self, nR: int = 32, nG: int = 16, samples: int = 32, dof: int = 6):
         """
         Test the inverse kinematics API, i.e., an inverse kinematics functionality that is framework-agnostic and does
         not require the user to know the details of the generative_graphik approach.
@@ -111,7 +111,7 @@ class ApiTests(unittest.TestCase):
         delta_t = toc - tic - t_eval
         print(f"\n\nIK Test took {delta_t:.2f} seconds. That's {1000 * delta_t / (nR * nG):.2f} ms per goal "
               f"or {1000 * delta_t / nR:.2f} ms per robot.")
-        print(f"Mean best: {np.mean(best_cost):.3f}, Std: {np.std(best_cost):.3f}")
+        print(f"Mean best: {np.mean(best_cost):.4f}, Std: {np.std(best_cost):.4f}")
         print(f"Mean cost: {np.mean(all_cost):.3f}, Std: {np.std(all_cost):.3f}")
 
 

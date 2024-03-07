@@ -46,7 +46,7 @@ def ik(kinematic_chains: torch.tensor,
     assert len(kinematic_chains.shape) == 4, f'Expected 4D tensor, got {kinematic_chains.shape}'
     nr, nj, _, _ = kinematic_chains.shape
 
-    t_zeros = {i: joint_transforms_to_t_zero(kinematic_chains[i], [f'p{j}' for j in range(1 + nj)]) for i in range(nr)}
+    t_zeros = {i: joint_transforms_to_t_zero(kinematic_chains[i], [f'p{j}' for j in range(1 + nj)], se3type='numpy') for i in range(nr)}
     robots = {i: RobotRevolute({'num_joints': nj, 'T_zero': t_zeros[i]}) for i in range(nr)}
     graphs = {i: ProblemGraphRevolute(robots[i]) for i in range(nr)}
     data = {i: {j: generate_data_point_from_pose(graphs[i], goals[j]).to(device) for j in range(len(goals))} for i in range(nr)}
@@ -72,11 +72,12 @@ def ik(kinematic_chains: torch.tensor,
                 batch_size=1,
                 num_samples=samples
             )
-        ).cpu().detach().numpy()
+        )
         best = float('inf')
         for k, p_k in enumerate(P_all):
-            q_k = graph.joint_variables(graph_from_pos(p_k, graph.node_ids),
-                                        {robot.end_effectors[0]: SE3Matrix.from_matrix(goals[j].detach().cpu().numpy(), normalize=True)})
+            q_k = graph.joint_variables(graph_from_pos(p_k.detach().cpu().numpy(), graph.node_ids),
+                                        {robot.end_effectors[0]: SE3Matrix.from_matrix(goals[j].detach().cpu().numpy(),
+                                                                                       normalize=True)})
             q_k = torch.tensor([q_k[key] for key in robot.joint_ids[1:]], device=device)
             if return_all:
                 q[i, j, k] = torch.tensor(q_k, device=device)
