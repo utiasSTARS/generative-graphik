@@ -1,4 +1,7 @@
 from typing import List, Union
+
+from liegroups.numpy.se2 import SE2Matrix
+from liegroups.numpy.se3 import SE3Matrix
 import numpy as np
 import os
 from tqdm import tqdm
@@ -58,6 +61,16 @@ class StructData:
     T0: Union[List[torch.Tensor], torch.Tensor]
 
 def generate_data_point_from_pose(graph, T_ee):
+    """
+    Generates a data point (~problem) from a problem graph and a desired end-effector pose.
+    """
+    if isinstance(T_ee, torch.Tensor):
+        T_ee = T_ee.detach().cpu().numpy()
+    if isinstance(T_ee, np.ndarray):
+        if T_ee.shape == (4, 4):
+            T_ee = SE3Matrix.from_matrix(T_ee, normalize=True)
+        else:
+            raise ValueError(f"Expected T_ee to be of shape (4, 4) or be SEMatrix, got {T_ee.shape}")
     struct_data = generate_struct_data(graph)
     num_joints = torch.tensor([struct_data.num_joints])
     edge_index_full = struct_data.edge_index_full
