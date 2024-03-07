@@ -1,4 +1,5 @@
 import itertools
+from time import time
 from typing import Tuple
 import unittest
 
@@ -17,8 +18,13 @@ class ApiTests(unittest.TestCase):
     """
 
     def setUp(self):
+        """
+        These tests rely on a trained model that needs to be present.
+        Its location should be specified in the config.yaml file.
+        """
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         try:
-            self.model = get_model()
+            self.model = get_model().to(self.device)
         except FileNotFoundError as exe:
             print(exe)
             if exe.filename.split('/')[-1] == 'config.yaml':
@@ -44,32 +50,37 @@ class ApiTests(unittest.TestCase):
         for _ in range(N):
             g = random_revolute_robot_graph(dof)
             T_zero = g.robot.from_dh_params(g.robot.params)
-            transforms = joint_transforms_from_t_zeros(T_zero, keys=g.robot.joint_ids)
+            transforms = joint_transforms_from_t_zeros(T_zero, keys=g.robot.joint_ids, device=self.device)
             T_zero_reconstructed = joint_transforms_to_t_zero(transforms, keys=g.robot.joint_ids)
             for key in T_zero:
                 self.assertTrue(np.allclose(T_zero[key].as_matrix(), T_zero_reconstructed[key].as_matrix()))
 
-    def test_ik_api(self, nR: int = 8, nG: int = 8, samples: int = 8, dof: int = 6):
+    def test_ik_api(self, nR: int = 16, nG: int = 16, samples: int = 16, dof: int = 6):
         """
         Test the inverse kinematics API, i.e., an inverse kinematics functionality that is framework-agnostic and does
         not require the user to know the details of the generative_graphik approach.
         """
+        tic = time()
+        t_eval = 0
         graphs = [random_revolute_robot_graph(dof) for _ in range(nR)]
         goals = dict.fromkeys(range(nR), None)
         for i, j in itertools.product(range(nR), range(nG)):
             if j == 0:
                 goals[i] = []
             q = torch.rand(dof + 1) * 2 * torch.pi - torch.pi
-            # q[-1] = 0
             angles = {jnt: q_jnt.item() for jnt, q_jnt in zip(graphs[i].robot.joint_ids, q)}
             T = graphs[i].robot.pose(angles, graphs[i].robot.end_effectors[-1])
-            goals[i].append(torch.Tensor(T.as_matrix()))
+            goals[i].append(torch.Tensor(T.as_matrix()).to(self.device))
 
+        all_cost = list()
+        best_cost = list()
         for i, g in enumerate(graphs):
             T_zero_native = g.robot.from_dh_params(g.robot.params)
-            transforms = joint_transforms_from_t_zeros(T_zero_native, keys=g.robot.joint_ids)
-            transforms = torch.unsqueeze(transforms, 0)  # T=D=
+            transforms = joint_transforms_from_t_zeros(T_zero_native, keys=g.robot.joint_ids, device=self.device)
+            transforms = torch.unsqueeze(transforms, 0)
             sol = ik(transforms, torch.stack(goals[i]), samples=samples, return_all=True)
+
+            t_eval_start = time()
 
             trans_errors = list()
             rot_errors = list()
@@ -78,17 +89,30 @@ class ApiTests(unittest.TestCase):
                 q_kl = {jnt: sol[0, k, l, m].item() for m, jnt in enumerate(g.robot.joint_ids[1:])}
                 q_kl['p0'] = 0
                 T = g.robot.pose(q_kl, g.robot.end_effectors[-1]).as_matrix()
-                e_rot, e_trans = self.ik_error(goals[i][k], torch.Tensor(T))
+                e_rot, e_trans = self.ik_error(goals[i][k], torch.tensor(T, device=self.device, dtype=torch.float32))
                 rot_errors.append(e_rot)
                 trans_errors.append(e_trans)
 
+            cost = [trans + rot * 0.05 / 2 for trans, rot in zip(trans_errors, rot_errors)]  # 2° ~ 0.05m
             # Get at least one good solution
-            self.assertLessEqual(np.min(rot_errors), 2)
-            self.assertLessEqual(np.min(trans_errors), 0.05)
+            self.assertLessEqual(np.min(rot_errors), 1)
+            self.assertLessEqual(np.min(trans_errors), 0.03)
+            self.assertLessEqual(np.min(cost), 0.05)
 
             # Is it significantly better than random? (educated guess of what a random precision would be)
             self.assertLessEqual(np.mean(rot_errors), 45)
-            self.assertLessEqual(np.min(trans_errors), np.mean([np.linalg.norm(goals[i][j][:3, 3]) for j in range(nG)]) / 10)
+            self.assertLessEqual(np.min(trans_errors),
+                                 np.mean([np.linalg.norm(goals[i][j][:3, 3].detach().cpu().numpy()) for j in range(nG)]) / 10)
+            best_cost.append(np.min(cost))
+            all_cost.append(np.mean(cost))
+            t_eval += time() - t_eval_start
+
+        toc = time()
+        delta_t = toc - tic - t_eval
+        print(f"\n\nIK Test took {delta_t:.2f} seconds. That's {1000 * delta_t / (nR * nG):.2f} ms per goal "
+              f"or {1000 * delta_t / nR:.2f} ms per robot.")
+        print(f"Mean best: {np.mean(best_cost):.3f}, Std: {np.std(best_cost):.3f}")
+        print(f"Mean cost: {np.mean(all_cost):.3f}, Std: {np.std(all_cost):.3f}")
 
 
 if __name__ == '__main__':

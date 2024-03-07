@@ -1,1 +1,1 @@
-model: '<path_to_your_pretrained_model>'
+model: '<path_to_your_pretrained_model_directory>'

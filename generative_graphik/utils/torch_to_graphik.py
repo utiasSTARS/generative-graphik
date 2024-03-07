@@ -17,11 +17,11 @@ def define_ik_data(robot_data: StructData, goals: torch.Tensor) -> Data:
     pass
 
 
-def joint_transforms_from_t_zeros(T_zero: Dict[str, SE3Matrix], keys: Sequence[str]) -> torch.Tensor:
+def joint_transforms_from_t_zeros(T_zero: Dict[str, SE3Matrix], keys: Sequence[str], device: str = None) -> torch.Tensor:
     """Assumes that joints are alphabetically sorted"""
-    ret = torch.zeros((len(T_zero) - 1, 4, 4))
+    ret = torch.zeros((len(T_zero) - 1, 4, 4), device=device)
     for i in range(1, len(keys)):
-        ret[i - 1] = torch.Tensor(T_zero[keys[i-1]].inv().dot(T_zero[keys[i]]).as_matrix())
+        ret[i - 1] = torch.tensor(T_zero[keys[i-1]].inv().dot(T_zero[keys[i]]).as_matrix(), device=device)
     return ret
 
 

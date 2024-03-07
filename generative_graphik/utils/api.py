@@ -49,7 +49,7 @@ def ik(kinematic_chains: torch.tensor,
     t_zeros = {i: joint_transforms_to_t_zero(kinematic_chains[i], [f'p{j}' for j in range(1 + nj)]) for i in range(nr)}
     robots = {i: RobotRevolute({'num_joints': nj, 'T_zero': t_zeros[i]}) for i in range(nr)}
     graphs = {i: ProblemGraphRevolute(robots[i]) for i in range(nr)}
-    data = {i: {j: generate_data_point_from_pose(graphs[i], goals[j]) for j in range(len(goals))} for i in range(nr)}
+    data = {i: {j: generate_data_point_from_pose(graphs[i], goals[j]).to(device) for j in range(len(goals))} for i in range(nr)}
     if return_all:
         q = torch.zeros((nr, len(goals), samples, nj), device=device)
     else:
