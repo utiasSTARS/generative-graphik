@@ -12,16 +12,25 @@ from generative_graphik.utils.torch_to_graphik import joint_transforms_from_t_ze
 
 
 class ApiTests(unittest.TestCase):
+    """
+    Tests the generative_graphik.utils.api functionalities.
+    """
 
     def setUp(self):
         try:
             self.model = get_model()
-        except Exception as e:
-            print(e)
-            raise e
+        except FileNotFoundError as exe:
+            print(exe)
+            if exe.filename.split('/')[-1] == 'config.yaml':
+                raise FileNotFoundError("No configuration file found. Create a config.yaml file similar to "
+                                        "sample_config.yaml and place it in the root of the project.")
+            else:
+                raise FileNotFoundError("No model found. Train a model and place it in the directory specified in the "
+                                        "config.yaml file.")
 
     @staticmethod
     def ik_error(T_desired: torch.Tensor, T_eef: torch.Tensor) -> Tuple[float, float]:
+        """Utility function to compute the error between two SE3 matrices."""
         r_desired = T_desired[:3, :3]
         r_eef = T_eef[:3, :3]
         t_desired = T_desired[:3, 3]
@@ -31,6 +40,7 @@ class ApiTests(unittest.TestCase):
         return e_rot.item(), e_trans.item()
 
     def test_conversions(self, N=10, dof=6):
+        """Test that the joint transforms (torch) can be converted to T_zero (dict of SE3) and back."""
         for _ in range(N):
             g = random_revolute_robot_graph(dof)
             T_zero = g.robot.from_dh_params(g.robot.params)
@@ -40,6 +50,10 @@ class ApiTests(unittest.TestCase):
                 self.assertTrue(np.allclose(T_zero[key].as_matrix(), T_zero_reconstructed[key].as_matrix()))
 
     def test_ik_api(self, nR: int = 8, nG: int = 8, samples: int = 8, dof: int = 6):
+        """
+        Test the inverse kinematics API, i.e., an inverse kinematics functionality that is framework-agnostic and does
+        not require the user to know the details of the generative_graphik approach.
+        """
         graphs = [random_revolute_robot_graph(dof) for _ in range(nR)]
         goals = dict.fromkeys(range(nR), None)
         for i, j in itertools.product(range(nR), range(nG)):
@@ -72,7 +86,7 @@ class ApiTests(unittest.TestCase):
             self.assertLessEqual(np.min(rot_errors), 2)
             self.assertLessEqual(np.min(trans_errors), 0.05)
 
-            # Is it significantly better than average?
+            # Is it significantly better than random? (educated guess of what a random precision would be)
             self.assertLessEqual(np.mean(rot_errors), 45)
             self.assertLessEqual(np.min(trans_errors), np.mean([np.linalg.norm(goals[i][j][:3, 3]) for j in range(nG)]) / 10)
 
