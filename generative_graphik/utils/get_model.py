@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# Author: Jonathan Külz
-# Date: 06.03.24
 from argparse import Namespace
 import json
 from pathlib import Path

@@ -1,7 +1,3 @@
-#!/usr/bin/env python3
-# Author: Jonathan Külz
-# Date: 06.03.24
-import itertools
 from typing import Dict, Sequence
 
 from liegroups.numpy.se3 import SE3Matrix
