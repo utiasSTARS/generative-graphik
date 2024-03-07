@@ -34,7 +34,7 @@ def ik(kinematic_chains: torch.tensor,
 
     :param kinematic_chains: A tensor of shape (nR, N, 4, 4) containing the joint transformations of nR robots with N
         joints each.
-    :param goals: A tensor of shape (nG, 4, 4) containing the desired end-effector poses.
+    :param goals: A tensor of shape (nR, nG, 4, 4) containing the desired end-effector poses.
     :param samples: The number of samples to use for the forward pass of the model.
     :param return_all: If True, returns all the samples from the forward pass, so the resulting tensor has a shape
         nR x nG x samples x nJ. If False, returns the best one only, so the resulting tensor has a shape nR x nG x nJ.
@@ -45,20 +45,21 @@ def ik(kinematic_chains: torch.tensor,
 
     assert len(kinematic_chains.shape) == 4, f'Expected 4D tensor, got {kinematic_chains.shape}'
     nr, nj, _, _ = kinematic_chains.shape
+    _, nG, _, _ = goals.shape
 
     t_zeros = {i: joint_transforms_to_t_zero(kinematic_chains[i], [f'p{j}' for j in range(1 + nj)], se3type='numpy') for i in range(nr)}
     robots = {i: RobotRevolute({'num_joints': nj, 'T_zero': t_zeros[i]}) for i in range(nr)}
     graphs = {i: ProblemGraphRevolute(robots[i]) for i in range(nr)}
-    data = {i: {j: generate_data_point_from_pose(graphs[i], goals[j]).to(device) for j in range(len(goals))} for i in range(nr)}
     if return_all:
-        q = torch.zeros((nr, len(goals), samples, nj), device=device)
+        q = torch.zeros((nr, nG, samples, nj), device=device)
     else:
-        q = torch.zeros((nr, len(goals), nj), device=device)
+        q = torch.zeros((nr, nG, nj), device=device)
 
-    for i, j in itertools.product(range(nr), range(len(goals))):
+    for i, j in itertools.product(range(nr), range(nG)):
         graph = graphs[i]
         robot = robots[i]
-        problem = data[i][j]
+        goal = goals[i, j]
+        problem = generate_data_point_from_pose(graph, goal).to(device)
         problem = model.preprocess(problem)
         P_all = (
             model.forward_eval(
@@ -76,15 +77,14 @@ def ik(kinematic_chains: torch.tensor,
         best = float('inf')
         for k, p_k in enumerate(P_all):
             q_k = graph.joint_variables(graph_from_pos(p_k.detach().cpu().numpy(), graph.node_ids),
-                                        {robot.end_effectors[0]: SE3Matrix.from_matrix(goals[j].detach().cpu().numpy(),
+                                        {robot.end_effectors[0]: SE3Matrix.from_matrix(goal.detach().cpu().numpy(),
                                                                                        normalize=True)})
-            q_k = torch.tensor([q_k[key] for key in robot.joint_ids[1:]], device=device)
             if return_all:
-                q[i, j, k] = torch.tensor(q_k, device=device)
+                q[i, j, k] = torch.tensor([q_k[key] for key in robot.joint_ids[1:]], device=device)
                 continue
             T_ee = graph.robot.pose(q_k, robot.end_effectors[-1])
-            cost = ik_cost_function(goals[j], T_ee)
+            cost = ik_cost_function(goal, torch.tensor(T_ee.as_matrix()).to(goal))
             if cost < best:
                 best = cost
-                q[i, j] = torch.tensor(q_k, device=device)
+                q[i, j] = torch.tensor([q_k[key] for key in robot.joint_ids[1:]], device=device)
     return q

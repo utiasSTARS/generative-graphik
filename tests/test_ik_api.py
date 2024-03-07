@@ -78,7 +78,7 @@ class ApiTests(unittest.TestCase):
             T_zero_native = g.robot.from_dh_params(g.robot.params)
             transforms = joint_transforms_from_t_zeros(T_zero_native, keys=g.robot.joint_ids, device=self.device)
             transforms = torch.unsqueeze(transforms, 0)
-            sol = ik(transforms, torch.stack(goals[i]), samples=samples, return_all=True)
+            sol = ik(transforms, torch.unsqueeze(torch.stack(goals[i]), dim=0), samples=samples, return_all=True)
 
             t_eval_start = time()
 
