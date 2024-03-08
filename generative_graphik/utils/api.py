@@ -30,7 +30,7 @@ def ik(kinematic_chains: torch.tensor,
        samples: int = 16,
        return_all: bool = False,
        ik_cost_function: Callable = _default_cost_function,
-       results: Optional[torch.Tensor] = None
+       results: Optional[torch.Tensor] = None,
        ) -> torch.Tensor:
     """
     This function takes robot kinematics and any number of goals and solves the inverse kinematics, using graphIK.
@@ -67,8 +67,7 @@ def ik(kinematic_chains: torch.tensor,
         goal = goals[i, j]
         problem = generate_data_point_from_pose(graph, goal).to(device)
         problem = model.preprocess(problem)
-        P_all = (
-            model.forward_eval(
+        P_all = model.forward_eval(
                 x=problem.pos,
                 h=torch.cat((problem.type, problem.goal_data_repeated_per_node), dim=-1),
                 edge_attr=problem.edge_attr,
@@ -79,15 +78,13 @@ def ik(kinematic_chains: torch.tensor,
                 batch_size=1,
                 num_samples=samples
             )
-        )
         best = float('inf')
         for k, p_k in enumerate(P_all):
             q_k = graph.joint_variables(graph_from_pos(p_k.detach().cpu().numpy(), graph.node_ids),
-                                        {robot.end_effectors[0]: SE3Matrix.from_matrix(goal.detach().cpu().numpy(),
+                                         {robot.end_effectors[0]: SE3Matrix.from_matrix(goal.detach().cpu().numpy(),
                                                                                        normalize=True)})
             if return_all:
                 q[i, j, k] = torch.tensor([q_k[key] for key in robot.joint_ids[1:]], device=device)
-                continue
             T_ee = graph.robot.pose(q_k, robot.end_effectors[-1])
             cost = ik_cost_function(goal, torch.tensor(T_ee.as_matrix()).to(goal))
             if cost < best:
@@ -110,7 +107,8 @@ def ik_mp(kinematic_chains: torch.tensor, goals: torch.tensor, max_processes: in
     """
     if max_processes == 1:
         return ik(kinematic_chains, goals, **kwargs)
-    mp.set_start_method('spawn', force=True)
+    if torch.cuda.is_available():
+        mp.set_start_method('spawn', force=True)
 
     nR, nJ, _, _ = kinematic_chains.shape
     n = min(max_processes, nR)
