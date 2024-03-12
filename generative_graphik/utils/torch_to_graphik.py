@@ -43,9 +43,9 @@ def joint_transforms_to_t_zero(transforms: torch.Tensor,
     for i in range(1, nj):
         t_zero[i] = t_zero[i - 1] @ t_zero[i]
     if se3type == 'torch':
-        t_zero = {keys[i+1]: SE3MatrixTorch.from_matrix(t_zero[i]) for i in range(nj)}
+        t_zero = {keys[i+1]: SE3MatrixTorch.from_matrix(t_zero[i], normalize=True) for i in range(nj)}
         t_zero[keys[0]] = SE3MatrixTorch.identity()
     else:
-        t_zero = {keys[i+1]: SE3Matrix.from_matrix(t_zero[i].detach().cpu().numpy()) for i in range(nj)}
+        t_zero = {keys[i+1]: SE3Matrix.from_matrix(t_zero[i].detach().cpu().numpy(), normalize=True) for i in range(nj)}
         t_zero[keys[0]] = SE3Matrix.identity()
     return t_zero

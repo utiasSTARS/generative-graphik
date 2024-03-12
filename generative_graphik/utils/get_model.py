@@ -26,7 +26,10 @@ def get_model() -> Model:
         return _model
     config = get_config()
     d = Path(config['model'])
-    state_dict = torch.load(d.joinpath('net.pth'))
+    if torch.cuda.is_available():
+        state_dict = torch.load(d.joinpath('net.pth'), map_location='cuda')
+    else:
+        state_dict = torch.load(d.joinpath('net.pth'), map_location='cpu')
     with d.joinpath('hyperparameters.txt').open('r') as f:
         args = Namespace(**json.load(f))
     model = Model(args)
