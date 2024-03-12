@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from generative_graphik.utils.dataset_generation import random_revolute_robot_graph
-from generative_graphik.utils.api import ik, ik_mp
+from generative_graphik.utils.api import ik
 from generative_graphik.utils.get_model import get_model
 from generative_graphik.utils.torch_to_graphik import joint_transforms_from_t_zeros, joint_transforms_to_t_zero
 

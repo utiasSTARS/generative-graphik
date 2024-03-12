@@ -91,35 +91,3 @@ def ik(kinematic_chains: torch.tensor,
                 best = cost
                 q[i, j] = torch.tensor([q_k[key] for key in robot.joint_ids[1:]], device=device)
     return q
-
-
-def ik_mp(kinematic_chains: torch.tensor, goals: torch.tensor, max_processes: int = 4, **kwargs):
-    """
-    Runs the inverse kinematics in multiple processes, each one solving problems for one robot only.
-
-    Attention, this does not work when you need gradients -- autograd does not support crossing process boundaries.
-
-    Args:
-        kinematic_chains: See ik
-        goals: See ik
-        max_processes: The maximum number of processes to use in parallel.
-        kwargs: Any key word arguments will be passed to the original ik in every process.
-    """
-    if max_processes == 1:
-        return ik(kinematic_chains, goals, **kwargs)
-    if kinematic_chains.device is torch.device('cuda'):
-        mp.set_start_method('spawn', force=True)
-
-    nR, nJ, _, _ = kinematic_chains.shape
-    n = min(max_processes, nR)
-    args = [[torch.unsqueeze(kinematic_chains[i], dim=0).detach(),
-             torch.unsqueeze(goals[i], dim=0).detach(),
-             kwargs.get('samples', 16),
-             False,
-             kwargs.get('ik_cost_function', _default_cost_function),
-             torch.zeros((goals.shape[1], nJ)).to(goals)] for i in range(nR)]
-
-    with mp.Pool(n) as pool:
-        pool.starmap(ik, args)
-
-    return torch.stack([a[-1] for a in args])
