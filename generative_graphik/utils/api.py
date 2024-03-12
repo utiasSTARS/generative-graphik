@@ -107,7 +107,7 @@ def ik_mp(kinematic_chains: torch.tensor, goals: torch.tensor, max_processes: in
     """
     if max_processes == 1:
         return ik(kinematic_chains, goals, **kwargs)
-    if torch.cuda.is_available():
+    if kinematic_chains.device is torch.device('cuda'):
         mp.set_start_method('spawn', force=True)
 
     nR, nJ, _, _ = kinematic_chains.shape

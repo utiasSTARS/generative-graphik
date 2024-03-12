@@ -29,6 +29,7 @@ class ApiTests(unittest.TestCase):
         These tests rely on a trained model that needs to be present.
         Its location should be specified in the config.yaml file.
         """
+        torch.manual_seed(1)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         try:
             self.model = get_model().to(self.device)
@@ -76,8 +77,8 @@ class ApiTests(unittest.TestCase):
                 q_kl['p0'] = 0
                 T = g.robot.pose(q_kl, g.robot.end_effectors[-1]).as_matrix()
                 e_rot, e_trans = self.ik_error(self.goals[i][k], torch.tensor(T, device=self.device, dtype=torch.float32))
-                rot_errors.append(e_rot)
                 trans_errors.append(e_trans)
+                rot_errors.append(e_rot)
         return trans_errors, rot_errors
 
     def test_conversions(self, N=10):
