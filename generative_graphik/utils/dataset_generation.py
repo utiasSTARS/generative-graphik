@@ -553,17 +553,5 @@ def main(args):
 
 
 if __name__ == "__main__":
-    # args = parse_data_generation_args()
-    # main(args)
-    dataset_params = {
-        "size": 10,
-        "samples": 100,
-        "dof": [6],
-        "goal_type": "pose",
-        "randomize": False,
-        "randomize_percentage": 0.5,
-    }
-    data, slices = generate_dataset(
-        dataset_params,
-        ["revolute_chain"],
-    )
+    args = parse_data_generation_args()
+    main(args)
