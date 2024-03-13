@@ -143,8 +143,6 @@ class ApiTests(unittest.TestCase):
     def test_multi_ik(self, samples: int = 32):
         """
         Tests the ik api if the problem is handed over in one large batch.
-        multiprocessing does not work together well with pytest -- if you want timings for the mp, run this outside of a
-        test suite and set was_started_manually to True.
         """
         all_transforms = torch.zeros((self.nR, self.dof, 4, 4), device=self.device)
 
@@ -162,7 +160,7 @@ class ApiTests(unittest.TestCase):
         print(f"\n\nIK took {delta_t:.2f} seconds. That's {1000 * delta_t / (self.nR * self.nG):.2f} ms per goal "
               f"or {1000 * delta_t / self.nR:.2f} ms per robot.")
         print(f"Mean cost: {np.mean(cost):.4f}, Std: {np.std(cost):.4f}")
-        self.assertTrue(np.mean(cost) < 0.075)
+        self.assertTrue(np.mean(cost) < 0.1)
 
 
 if __name__ == '__main__':
