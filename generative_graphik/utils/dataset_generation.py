@@ -1,8 +1,11 @@
-from typing import List, Union
+from typing import Iterable, List, Union
+
+from liegroups.numpy.se2 import SE2Matrix
+from liegroups.numpy.se3 import SE3Matrix
 import numpy as np
 import os
 from tqdm import tqdm
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import torch
 from torch_geometric.data import InMemoryDataset, Data
@@ -57,31 +60,94 @@ class StructData:
     edge_index_full: Union[List[torch.Tensor], torch.Tensor]
     T0: Union[List[torch.Tensor], torch.Tensor]
 
-def generate_data_point_from_pose(graph, T_ee):
-    struct_data = generate_struct_data(graph)
+
+def create_dataset_from_data_points(data_points: Iterable[Data]) -> CachedDataset:
+    """Takes an iterable of Data objects and returns a CachedDataset by concatenating them."""
+    data = tuple(data_points)
+    types = torch.cat([d.type for d in data], dim=0)
+    T0 = torch.cat([d.T0 for d in data], dim=0).reshape(-1, 4, 4)
+    device = T0.device
+    num_joints = torch.concat([d.num_joints for d in data])
+    num_nodes = torch.tensor([d.num_nodes for d in data], device=device)
+    num_edges = torch.tensor([d.num_edges for d in data], device=device)
+
+    P = torch.cat([d.pos for d in data], dim=0)
+    distances = torch.cat([d.edge_attr for d in data], dim=0)
+    T_ee = torch.stack([d.T_ee for d in data], dim=0)
+    masks = torch.cat([d.partial_mask for d in data], dim=-1)
+    edge_index_full = torch.cat([d.edge_index_full for d in data], dim=-1)
+    partial_goal_mask = torch.cat([d.partial_goal_mask for d in data], dim=-1)
+
+    node_slice = torch.cat([torch.tensor([0], device=device), (num_nodes).cumsum(dim=-1)])
+    joint_slice = torch.cat([torch.tensor([0], device=device), (num_joints).cumsum(dim=-1)])
+    frame_slice = torch.cat([torch.tensor([0], device=device), (num_joints + 1).cumsum(dim=-1)])
+    robot_slice = torch.arange(num_joints.size(0) + 1, device=device)
+    edge_full_slice = torch.cat([torch.tensor([0], device=device), (num_edges).cumsum(dim=-1)])
+
+    slices = {
+        "edge_attr": edge_full_slice,
+        "pos": node_slice,
+        "type": node_slice,
+        "T_ee": robot_slice,
+        "num_joints": robot_slice,
+        "partial_mask": edge_full_slice,
+        "partial_goal_mask": node_slice,
+        "edge_index_full": edge_full_slice,
+        "M": frame_slice,
+        "q_goal": joint_slice,
+    }
+
+    data = Data(
+        type=types,
+        pos=P,
+        edge_attr=distances,
+        T_ee=T_ee,
+        num_joints=num_joints.type(torch.int32),
+        partial_mask=masks,
+        partial_goal_mask=partial_goal_mask,
+        edge_index_full=edge_index_full.type(torch.int32),
+        M=T0,
+    )
+
+    return CachedDataset(data, slices)
+
+def generate_data_point_from_pose(graph, T_ee, device = None) -> Data:
+    """
+    Generates a data point (~problem) from a problem graph and a desired end-effector pose.
+    """
+    if isinstance(T_ee, torch.Tensor):
+        if device is None:
+            device = T_ee.device
+        T_ee = T_ee.detach().cpu().numpy()
+    if isinstance(T_ee, np.ndarray):
+        if T_ee.shape == (4, 4):
+            T_ee = SE3Matrix.from_matrix(T_ee, normalize=True)
+        else:
+            raise ValueError(f"Expected T_ee to be of shape (4, 4) or be SEMatrix, got {T_ee.shape}")
+    struct_data = generate_struct_data(graph, device)
     num_joints = torch.tensor([struct_data.num_joints])
-    edge_index_full = struct_data.edge_index_full
+    edge_index_full = struct_data.edge_index_full.to(dtype=torch.int32, device=device)
     T0 = struct_data.T0
 
     # Build partial graph nodes
     G_partial = graph.from_pose(T_ee)
-    T_ee = torch.from_numpy(T_ee.as_matrix()).type(torch.float32)
+    T_ee = torch.from_numpy(T_ee.as_matrix()).to(dtype=torch.float32, device=device)
     P = np.array([p[1] for p in list(G_partial.nodes.data('pos', default=np.array([0,0,0])))])
-    P = torch.from_numpy(P).type(torch.float32)
+    P = torch.from_numpy(P).to(dtype=torch.float32, device=device)
 
     # Build distances of partial graph
     distances = np.sqrt(distance_matrix_from_graph(G_partial))
     # Remove self-loop
     distances = distances[~np.eye(distances.shape[0],dtype=bool)].reshape(distances.shape[0],-1)
-    distances = torch.from_numpy(distances).type(torch.float32)
+    distances = torch.from_numpy(distances).to(dtype=torch.float32, device=device)
     # Remove filler NetworkX extra 1s
     distances = struct_data.partial_mask * distances.reshape(-1)
     return Data(
         pos=P,
-        edge_index_full=edge_index_full.type(torch.int32),
+        edge_index_full=edge_index_full,
         edge_attr=distances.unsqueeze(1),
         T_ee=T_ee,
-        num_joints=num_joints.type(torch.int32),
+        num_joints=num_joints.to(dtype=torch.int32, device=device),
         q_goal=None,
         partial_mask=struct_data.partial_mask,
         partial_goal_mask=struct_data.partial_goal_mask,
@@ -118,7 +184,7 @@ def generate_data_point(graph):
     )
 
 
-def generate_struct_data(graph):
+def generate_struct_data(graph, device=None):
 
     robot = graph.robot
     dof = robot.n
@@ -153,7 +219,7 @@ def generate_struct_data(graph):
         mask_gen[edge_index_full[0], edge_index_full[1]] > 0
     )  # get full elements from matrix (same order as generated)
 
-    return StructData(
+    data = StructData(
         type=type,
         num_joints=num_joints,
         num_edges=num_edges,
@@ -163,6 +229,15 @@ def generate_struct_data(graph):
         edge_index_full=edge_index_full,
         T0=T0,
     )
+    if device is None:
+        return data
+    data = StructData(**{
+        f.name: getattr(data, f.name).to(device)
+        if isinstance(getattr(data, f.name), torch.Tensor)
+        else getattr(data, f.name)
+        for f in fields(data)
+    })
+    return data
 
 
 def generate_specific_robot_data(robots, num_examples, params):
