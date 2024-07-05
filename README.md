@@ -1,5 +1,5 @@
 # generative-graphIK
-Code for paper on [Generative Graphical Inverse Kinematics](https://arxiv.org/abs/2209.08812)
+Code for paper on [Generative Graphical Inverse Kinematics](https://arxiv.org/abs/2209.08812).
 
 ## Installation
 Install matching versions of [PyTorch](https://pytorch.org/get-started/previous-versions/#v1101:~:text=org/whl/cpu-,v1.10.1,-Conda) and [PyTorch-Geometric](https://pytorch-geometric.readthedocs.io/en/2.0.3/notes/installation.html). We used `torch-1.10.1` and `torch-geometric-2.0.4` but other versions should work as well. 
